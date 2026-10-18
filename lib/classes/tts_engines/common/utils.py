@@ -919,6 +919,33 @@ class TTSUtils:
                 return False, error
             self.params['inline_voice'] = self.params['current_voice'] = inline_voice
             return True, None
+        elif tag == 'emotion':
+            # [emotion:label]...[/emotion]: override the sampling params (and the
+            # segment gain) for the enclosed text.  Engines without
+            # fine_tuned_params still accept the tag and only get the gain.
+            stack = getattr(self, '_sml_emotion_stack', None)
+            if stack is None:
+                stack = self._sml_emotion_stack = []
+            current_gain = float(self.params.get('emotion_gain', 1.0))
+            if close:
+                if stack:
+                    saved_params, saved_gain = stack.pop()
+                    if saved_params is not None:
+                        self.fine_tuned_params = saved_params
+                    self.params['emotion_gain'] = saved_gain
+                return True, None
+            label = (value or '').strip().lower()
+            settings = TTS_SML_EMOTIONS.get(label) or TTS_SML_EMOTIONS.get(TTS_SML_DEFAULT_EMOTION, {})
+            saved_params = None
+            current_params = getattr(self, 'fine_tuned_params', None)
+            if isinstance(current_params, dict):
+                saved_params = dict(current_params)
+                for key, override in settings.items():
+                    if key != 'gain' and key in current_params:
+                        current_params[key] = override
+            self.params['emotion_gain'] = current_gain * float(settings.get('gain', 1.0))
+            self._sml_emotion_stack.append((saved_params, current_gain))
+            return True, None
         elif tag == 'ipa':
             if close:
                 value = '' # TODO: get the value between tag [ipa] and close [/ipa]

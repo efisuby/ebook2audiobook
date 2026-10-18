@@ -155,8 +155,9 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 - `[pause]` — silence (random range **1.0–1.6 sec.**)
 - `[pause:N]` — fixed pause (**N sec.**)
 - `[voice:/path/to/voice/file]...[/voice]` — switch voice from default or selected voice from GUI/CLI
+- `[emotion:LABEL]...[/emotion]` — keep the voice but tune it for the enclosed text: the label overrides the engine sampling parameters (**temperature**, `top_p`, `speed`) and applies a volume gain until `[/emotion]`. Labels: `neutral`, `calm`, `mysterious`, `melancholic`, `sad`, `anxious`, `afraid`, `sarcastic`, `happy`, `playful`, `passionate`, `energetic`, `excited`, `angry`. `neutral` is a no-op and can be omitted. Engines that lack the tuned parameters (all but XTTS/Bark) still apply the gain.
 
-**Check our other repo dedicated to add SML automatically in your ebook -> [E2A-SML](https://github.com/DrewThomasson/E2A-SML)**
+**Check our other repo dedicated to add SML automatically in your ebook -> [E2A-SML](https://github.com/efisuby/E2A-SML)**
 
 > [!IMPORTANT]
 **Before to post an install or bug issue search carefully to the opened and closed issues TAB<br>
@@ -365,6 +366,7 @@ SML tags available:
 	[pause] — silence (random range **1.0–1.6 sec.**)
 	[pause:N] — fixed pause (**N sec.**)
 	[voice:/path/to/voice/file]...[/voice] — switch voice from default or selected voice from GUI/CLI
+	[emotion:LABEL]...[/emotion] — tune temperature/top_p/speed and volume gain for the enclosed text
 
 ```
 

@@ -9,7 +9,7 @@ from lib.classes.std_filter import StdoutFilter
 from lib.classes.tts_registry import TTSRegistry
 from lib.classes.tts_engines.common.utils import TTSUtils
 from lib.conf import tts_dir, devices, default_audio_proc_format
-from lib.conf_models import TTS_ENGINES, TTS_VOICE_CONVERSION, TTS_SML, SML_TAG_PATTERN, loaded_tts, default_vc_model, default_engine_settings, tts_engines_from_coqui
+from lib.conf_models import TTS_ENGINES, TTS_VOICE_CONVERSION, TTS_SML, SML_TAG_PATTERN, TTS_SML_EMOTIONS, TTS_SML_DEFAULT_EMOTION, loaded_tts, default_vc_model, default_engine_settings, tts_engines_from_coqui
 
 __all__ = [
     "sys",
@@ -34,6 +34,8 @@ __all__ = [
     "TTS_VOICE_CONVERSION",
     "TTS_SML",
     "SML_TAG_PATTERN", 
+    "TTS_SML_EMOTIONS",
+    "TTS_SML_DEFAULT_EMOTION",
     "loaded_tts",
     "default_vc_model",
     "default_engine_settings",

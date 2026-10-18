@@ -155,8 +155,9 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 - `[pause]` — тишина (случайный диапазон **1.0–1.6 sec.**)
 - `[pause:N]` — фиксированная пауза (**N sec.**)
 - `[voice:/path/to/voice/file]...[/voice]` — переключение голоса с голоса по умолчанию или выбранного из GUI/CLI
+- `[emotion:LABEL]...[/emotion]` — тот же голос, но с настройкой под текст: метка переопределяет параметры генерации (**temperature**, `top_p`, `speed`) и применяет усиление громкости до `[/emotion]`. Метки: `neutral`, `calm`, `mysterious`, `melancholic`, `sad`, `anxious`, `afraid`, `sarcastic`, `happy`, `playful`, `passionate`, `energetic`, `excited`, `angry`. `neutral` ничего не меняет и его можно не указывать. Движки без этих параметров (все, кроме XTTS/Bark) всё равно применяют усиление громкости.
 
-**Проверьте наш другой репозиторий, предназначенный для автоматического добавления SML в вашу электронную книгу -> [E2A-SML](https://github.com/DrewThomasson/E2A-SML)**
+**Проверьте наш другой репозиторий, предназначенный для автоматического добавления SML в вашу электронную книгу -> [E2A-SML](https://github.com/efisuby/E2A-SML)**
 
 > Важно
 **Прежде чем сообщать о проблеме с установкой или ошибке, внимательно поищите во вкладке открытых и закрытых задач<br>
@@ -365,6 +366,7 @@ SML tags available:
 	[pause] — silence (random range **1.0–1.6 sec.**)
 	[pause:N] — fixed pause (**N sec.**)
 	[voice:/path/to/voice/file]...[/voice] — switch voice from default or selected voice from GUI/CLI
+	[emotion:LABEL]...[/emotion] — tune temperature/top_p/speed and volume gain for the enclosed text
 
 ```
 

@@ -26,7 +26,31 @@ TTS_VOICE_CONVERSION = {
 TTS_SML = {
     "break": {"static": "[break]", "paired": False},
     "pause": {"static": "[pause]", "paired": False},
-    "voice": {"paired": True}
+    "voice": {"paired": True},
+    "emotion": {"paired": True}
+}
+
+# [emotion:label] tuning.  A label is mapped to a set of fine_tuned_params
+# overrides (same names as the engines' keys: temperature, top_p, speed, ...)
+# that stay in effect until the closing [/emotion], plus an optional
+# "gain" multiplying the produced audio segment.  An engine that does not
+# declare a given key keeps its own value, and always gets the gain.
+TTS_SML_DEFAULT_EMOTION = "neutral"
+TTS_SML_EMOTIONS = {
+    "neutral":     {"gain": 1.0},
+    "calm":        {"temperature": 0.55, "top_p": 0.90, "speed": 0.95, "gain": 0.95},
+    "mysterious":  {"temperature": 0.60, "top_p": 0.90, "speed": 0.93, "gain": 0.92},
+    "melancholic": {"temperature": 0.60, "top_p": 0.90, "speed": 0.92, "gain": 0.90},
+    "sad":         {"temperature": 0.60, "top_p": 0.90, "speed": 0.90, "gain": 0.90},
+    "anxious":     {"temperature": 0.70, "top_p": 0.92, "speed": 1.05, "gain": 1.00},
+    "afraid":      {"temperature": 0.70, "top_p": 0.92, "speed": 1.05, "gain": 1.00},
+    "sarcastic":   {"temperature": 0.70, "top_p": 0.92, "speed": 0.98, "gain": 1.00},
+    "happy":       {"temperature": 0.75, "top_p": 0.95, "speed": 1.06, "gain": 1.06},
+    "playful":     {"temperature": 0.80, "top_p": 0.95, "speed": 1.08, "gain": 1.05},
+    "passionate":  {"temperature": 0.80, "top_p": 0.95, "speed": 1.04, "gain": 1.05},
+    "energetic":   {"temperature": 0.80, "top_p": 0.95, "speed": 1.10, "gain": 1.06},
+    "excited":     {"temperature": 0.85, "top_p": 0.95, "speed": 1.12, "gain": 1.08},
+    "angry":       {"temperature": 0.80, "top_p": 0.95, "speed": 1.05, "gain": 1.10},
 }
 
 sml_escape_tag = 0xE000

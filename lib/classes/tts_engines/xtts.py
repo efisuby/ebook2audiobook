@@ -180,6 +180,9 @@ class XTTS(TTSUtils, TTSRegistry, name='xtts'):
                                         return False, error
                                     if part[-1].isalnum() or part[-1] == '—':
                                         part_tensor = trim_audio(part_tensor.squeeze(), self.params['samplerate'], 0.001, trim_audio_buffer).unsqueeze(0)
+                                    emotion_gain = self.params.get('emotion_gain')
+                                    if emotion_gain and float(emotion_gain) != 1.0:
+                                        part_tensor = part_tensor * float(emotion_gain)
                                     self.audio_segments.append(part_tensor)
                                     if not re.search(r'\w$', part, flags=re.UNICODE) and part[-1] != '—':
                                         silence_time = int(np.random.uniform(0.3, 0.6) * 100) / 100
