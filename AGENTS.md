@@ -247,3 +247,58 @@ Consequences to keep in mind:
 - After any transformers or gradio bump re-check both engines: transformers must stay
   below 5 unless `qwen-tts` ships a 5.x-capable release, and gradio must stay on a
   version that runs with `huggingface-hub<1.0`.
+
+## Fork change: the SML pipeline (`booknlp/` + `sml_extractor/`)
+
+The E2A-SML project is merged into E2A: `booknlp/` (vendored BookNLP plus the fork's
+Russian pipeline) and `sml_extractor/` (BookNLP runner, character extraction,
+descriptions, voice casting, emotions, SML writer) sit in the repository root and are
+imported directly, so `app.py` and the GUI can run the whole book-to-SML path in the
+same process. Runtime data is reused from the E2A-SML checkout: `data/` is a symlink to
+`../E2A-SML/data` (7.8 GB — BookNLP models, the Qwen3-1.7B cache, the voice library) and
+is gitignored; `SML_DATA_DIR` overrides the location.
+
+### Files touched
+
+| File | Change |
+|------|--------|
+| `booknlp/` | vendored verbatim (incl. `english/data/` resources, the fork's `russian/` pipeline, `LICENSE`) |
+| `sml_extractor/` | ported verbatim minus `docker_entrypoint.py` |
+| `sml_extractor/character_profile.py` | new: per-character descriptions |
+| `tests/` | the 7 E2A-SML test modules (without `test_web_gui.py`) + `test_character_profile.py` |
+| environment | `sentence-transformers`, `ru_core_news_sm`, `en_core_web_sm`, `pymorphy3`, `pymorphy3-dicts-ru`, `dawg-python`, all installed with `--no-deps` (the spaCy models from the GitHub release wheels) |
+
+### Design notes for future edits
+
+- Character dicts keep the E2A-SML shape: `normalized_name`, `inferred_gender`,
+  `inferred_age_category`, `tts_engine`, `language`, `voice` (+ optional `description`,
+  `description_source`, `key_character`). `extract_characters()` returns
+  `booknlp_data['characters_simple']['characters']` untouched when BookNLP wrote it; the
+  Russian gender/age inference in `core.py` (`_infer_gender_from_russian_name`, the
+  `_RU_*` tables) only runs on the fallback path.
+- `character_profile.describe_characters()` writes `description` and
+  `description_source` ∈ `user`/`llm`/`heuristic`: text the user supplied is never
+  overwritten, the heuristic is always written first, and the model only replaces it for
+  characters it actually describes.
+- Evidence is deliberately narrow: quotes come from the dialogue index, mentions are
+  *the narration sentence containing a name variant* (`_sentences`, not a ±200 char
+  window — a window leaks the next character's material into the description). Variants
+  are searched with a leading `\b` but no trailing one, so Russian case endings match.
+- Characters without a line of their own and with fewer than `_MIN_MENTIONS` (2)
+  mentions are not sent to the model at all, and neither is `Narrator`: on that little
+  material the model invents. The heuristic stays
+  (`взрослый мужчина, 3 реплик. Характерные слова: …` / `Голос рассказчика, …`).
+- The prompt forbids inventing a biography, turning the age category into a number or
+  inventing looks, and asks for flowing prose: the first version mimicked the rule
+  labels and answered in a `«Возрастная категория: … Внешность: …»` template.
+- Batch size from `E2A_SML_PROFILE_BATCH` (default 8); the model is the shared
+  `llm_client` (Qwen3-1.7B, `E2A_SML_LLM_*` env), and any `LlmError`/exception only
+  prints and leaves the heuristics in place — descriptions never fail a book.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 108 tests
+OK (85 ported + 23 profile). For the real path run `/tmp/opencode/profile_e2e.py`:
+BookNLP (small, `rus`) over a short Russian text, then `describe_characters` with the
+real model — `Narrator` and thin characters must stay `heuristic`, the rest `llm`, and
+no description may mention another character's features.
