@@ -24,3 +24,8 @@ models/*
 # downloaded voice library (see voices/.version.json); not tracked upstream
 voices/
 .env
+# BookNLP/SML runtime data (models + voice library), shared with the SML fork
+# through $SML_DATA_DIR or a local symlink; never tracked (both the directory
+# and the symlink to it are matched, hence the two entries)
+/data
+/data/

@@ -1,0 +1,461 @@
+"""SML output generator - converts BookNLP output to SML format for ebook2audiobook."""
+
+import json
+import os
+import re
+from pathlib import Path
+
+
+def resolve_voice_path(voice_path:str, library_root:str)->Path:
+    """Find a voice in this tool's library for local playback."""
+    library_root = Path(library_root).expanduser().resolve()
+    path = Path(voice_path).expanduser()
+    if not path.is_absolute() and path.parts and path.parts[0] == 'voices':
+        path = library_root / path
+    return path.resolve()
+
+
+def portable_voice_assignments(voice_assignments:dict[str,str], library_root:str)->dict[str,str]:
+    """Use E2A-relative paths for library voices and absolute paths for custom voices."""
+    voices_root = Path(library_root).expanduser().resolve() / 'voices'
+    portable:dict[str,str] = {}
+    for character, voice_path in voice_assignments.items():
+        path = resolve_voice_path(voice_path, library_root)
+        try:
+            portable[character] = str(Path('voices') / path.relative_to(voices_root))
+        except ValueError:
+            portable[character] = str(path)
+    return portable
+
+
+def speaking_characters(booknlp_data: dict, characters: list) -> list:
+    """Return narrator and characters attributed at least one quote."""
+    name_map = _build_coref_name_map(booknlp_data.get('book_data'))
+    names = {'Narrator'}
+    for quote in booknlp_data.get('quotes', []):
+        names.add(name_map.get(str(quote.get('char_id')), 'Narrator'))
+
+    selected = []
+    seen = set()
+    for character in characters:
+        name = character.get('normalized_name')
+        if name in names and name not in seen:
+            selected.append(character)
+            seen.add(name)
+    for name in sorted(names - seen):
+        selected.append({
+            'normalized_name': name,
+            'inferred_gender': 'unknown',
+            'inferred_age_category': 'adult',
+            'voice': None,
+        })
+    return selected
+
+
+def generate_sml_output(
+    booknlp_data: dict,
+    characters: list,
+    output_path: str,
+    voice_assignments: dict | None = None,
+    use_macros: bool = True,
+    emotion_map: dict | None = None,
+) -> str:
+    """Generate SML-formatted text from BookNLP token-level and quote data.
+
+    Uses the .tokens and .quotes files directly (token-level granularity)
+    instead of the sentence-level .book.txt, so that dialog and narration
+    are properly separated at exact quote boundaries.
+
+    Falls back to the sentence-level .book.txt approach if token/quote data
+    is not available.
+
+    Args:
+        booknlp_data: Dict returned by load_booknlp_output() containing
+            tokens, quotes, book_data, and optionally book_txt.
+        characters: List of character dicts with voice assignments.
+        output_path: Path to write the SML output file.
+        voice_assignments: Optional dict mapping character names to voice file paths.
+        use_macros: If True, voice tags use character names as macro references
+            instead of raw file paths. This format also needs the generated
+            character-to-voice JSON; use path-based tags for direct E2A input.
+        emotion_map: Optional ``{text: label}`` map (see
+            :mod:`sml_extractor.emotion`) that wraps a line in
+            ``[emotion:label]``; lines without a label stay untagged.
+
+    Returns:
+        Path to the generated SML file.
+    """
+    char_voice_map = _build_voice_map(characters, voice_assignments)
+    segments = _book_segments(booknlp_data)
+
+    sml_content = _render_segments(
+        segments,
+        char_voice_map,
+        use_macros=use_macros,
+        emotion_map=emotion_map or {},
+    )
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(sml_content)
+
+    return output_path
+
+
+def collect_speech_segments(booknlp_data: dict) -> list:
+    """Return the ordered ``(speaker, text)`` segments the SML writer emits.
+
+    The text is exactly what ends up inside the voice block, so an emotion map
+    built from this list is found again by :func:`generate_sml_output`.
+    """
+    collected = []
+    for speaker, text in _book_segments(booknlp_data):
+        if speaker is None:
+            continue
+        cleaned = clean_tts_text(text)
+        if cleaned:
+            collected.append((speaker, cleaned))
+    return collected
+
+
+def _book_segments(booknlp_data: dict) -> list:
+    """Raw ``(speaker|None, text)`` segments for the available book data."""
+    tokens = booknlp_data.get("tokens")
+    quotes = booknlp_data.get("quotes")
+    if tokens and quotes is not None:
+        return _segments_from_tokens(
+            tokens, quotes, booknlp_data.get("book_data")
+        )
+    if "book_txt" in booknlp_data:
+        return _segments_from_book_txt(booknlp_data["book_txt"])
+    raise ValueError(
+        "No token/quote data or book.txt found in BookNLP output."
+    )
+
+
+def _render_segments(
+    segments: list,
+    char_voice_map: dict,
+    use_macros: bool = True,
+    emotion_map: dict | None = None,
+) -> str:
+    """Turn ``(speaker, text)`` segments into the SML document.
+
+    Every voice block stays on one text line: Calibre can split a TXT book at
+    headings, and an opening tag stranded in another XHTML document would be
+    rejected by E2A, which validates each document separately.
+    """
+    emotion_map = emotion_map or {}
+    sml_lines = []
+
+    for speaker, text in segments:
+        if speaker is None:
+            # Paragraph break ("" from the token path) or a raw pass-through
+            # line from the .book.txt fallback.
+            sml_lines.append(text)
+            continue
+
+        cleaned = clean_tts_text(text)
+        if not cleaned:
+            continue
+
+        label = emotion_map.get(cleaned)
+        body = f"[emotion:{label}]{cleaned}[/emotion]" if label else cleaned
+
+        voice_path = char_voice_map.get(speaker)
+        voice_tag_val = speaker if use_macros else voice_path
+        sml_lines.append(
+            f"[voice:{voice_tag_val}]{body}[/voice]" if voice_tag_val else body
+        )
+
+    return "\n".join(sml_lines)
+
+
+def _segments_from_tokens(
+    tokens: list,
+    quotes: list,
+    book_data: dict | None,
+) -> list:
+    """Split the token stream at quote boundaries and paragraph breaks.
+
+    This gives exact narrator/character voice switches at quote boundaries
+    instead of the sentence-level approximation from .book.txt.
+
+    Returns ``(speaker, text)`` pairs; a ``speaker`` of ``None`` marks a
+    paragraph break (with an empty text).
+    """
+    # Build coref_id -> normalized character name mapping
+    coref_to_name = _build_coref_name_map(book_data)
+
+    # Build a set of (token_id -> speaker_name) from quotes data
+    token_speaker = {}
+    for q in quotes:
+        try:
+            q_start = int(q.get("quote_start", -1))
+            q_end = int(q.get("quote_end", -1))
+        except (ValueError, TypeError):
+            continue
+
+        char_id = q.get("char_id")
+        if char_id is None or char_id == "None" or char_id == "":
+            speaker_name = "Narrator"
+        else:
+            try:
+                char_id = int(char_id)
+            except (ValueError, TypeError):
+                char_id = str(char_id)
+            speaker_name = coref_to_name.get(char_id, coref_to_name.get(str(char_id), "Narrator"))
+
+        for tid in range(q_start, q_end + 1):
+            token_speaker[tid] = speaker_name
+
+    # Walk through tokens and build segments of consecutive same-speaker text
+    segments = []
+    current_speaker = None
+    current_words = []
+    current_para = None
+
+    for tok in tokens:
+        try:
+            tid = int(tok.get("token_ID_within_document", -1))
+        except (ValueError, TypeError):
+            continue
+
+        word = tok.get("word", "")
+        para_id = tok.get("paragraph_ID")
+
+        speaker = token_speaker.get(tid, "Narrator")
+
+        # Paragraph break → flush current segment and insert blank line
+        if current_para is not None and para_id != current_para and current_words:
+            segments.append((current_speaker, _join_tokens(current_words)))
+            current_words = []
+            current_speaker = None
+            segments.append((None, ""))  # paragraph break marker
+
+        # Speaker change → flush segment
+        if speaker != current_speaker and current_words:
+            segments.append((current_speaker, _join_tokens(current_words)))
+            current_words = []
+
+        current_speaker = speaker
+        current_words.append(word)
+        current_para = para_id
+
+    # Flush remaining
+    if current_words:
+        segments.append((current_speaker, _join_tokens(current_words)))
+
+    return segments
+
+
+def _segments_from_book_txt(book_txt_content: str) -> list:
+    """Split the sentence-level .book.txt into ``(speaker, text)`` segments.
+
+    ``[Name] text [/]`` lines become dialogue; blank lines stay as paragraph
+    breaks (``None, ""``) and any other line is passed through verbatim.
+    """
+    segments = []
+    for raw_line in book_txt_content.strip().split("\n"):
+        line = raw_line.strip()
+        if not line:
+            segments.append((None, ""))
+            continue
+
+        match = re.match(r"^\[([^\]]+)\]\s*(.*?)\s*\[/\]$", line)
+        if match:
+            segments.append((match.group(1), match.group(2).strip()))
+        else:
+            segments.append((None, line))
+
+    return segments
+
+
+def _build_coref_name_map(book_data: dict | None) -> dict:
+    """Build mapping from coref cluster ID to normalized character name.
+
+    Uses the .book JSON which contains character IDs and their proper-name
+    mentions (the same data used by BookNLP to generate book.txt).
+    """
+    name_map = {}
+    if not book_data:
+        return name_map
+
+    for character in book_data.get("characters", []):
+        char_id = character.get("id")
+        if char_id is None:
+            continue
+
+        mentions = character.get("mentions", {})
+        proper = mentions.get("proper", [])
+        common = mentions.get("common", [])
+
+        # Pick the most common proper name, falling back to common noun
+        canonical = None
+        if proper:
+            canonical = proper[0].get("n", "")
+        elif common:
+            canonical = common[0].get("n", "")
+
+        if canonical:
+            normalized = _normalize_name(canonical.title())
+        else:
+            normalized = f"Character{char_id}"
+
+        name_map[char_id] = normalized
+        name_map[str(char_id)] = normalized
+
+    # Narrator is a special case (coref_id=0 is often the first-person narrator)
+    if 0 not in name_map:
+        name_map[0] = "Narrator"
+        name_map["0"] = "Narrator"
+
+    return name_map
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a name to CamelCase (matching core.py's normalization).
+
+    Keeps letters of any alphabet so Cyrillic names are not wiped out.
+    """
+    name = re.sub(r"[^\w\s-]", "", name, flags=re.UNICODE).replace("_", "")
+    parts = name.strip().split()
+    return "".join(word.capitalize() for word in parts) if parts else "Unknown"
+
+
+def clean_tts_text(text: str) -> str:
+    """Remove non-standard characters that may cause issues with TTS engines.
+
+    Keeps alphanumeric characters (including accented letters via \\w), spaces,
+    and standard punctuation. Specifically retains:
+    - ASCII and Unicode word characters (letters, digits, underscore)
+    - Whitespace
+    - Common punctuation: . , ! ? ; : " ' ( ) [ ] { } - — – and curly quotes " " ' '
+    """
+    if not text:
+        return ""
+
+    # Replace non-breaking space with normal space
+    text = text.replace('\u00A0', ' ')
+    # Retain word chars, whitespace, and the explicitly listed punctuation variants
+    # (both ASCII and Unicode curly/typographic equivalents)
+    text = re.sub(r'[^\w\s\.,!\?;:\"\'\u2018\u2019()\[\]\{\}\-\u2014\u2013\u201C\u201D]', '', text)
+    # Collapse multiple spaces into one
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip()
+
+
+def _join_tokens(words: list) -> str:
+    """Join tokens into readable text with proper punctuation, contraction, and dialect spacing."""
+    if not words:
+        return ""
+
+    text = " ".join(words)
+
+    # 1. Fix "n't" contractions with both straight and curly apostrophes
+    text = re.sub(r"\b(\w+)\s+(n['’]t)\b", r"\1\2", text, flags=re.IGNORECASE)
+
+    # 2. Fix standard contractions with both straight and curly apostrophes
+    text = re.sub(r"\b(\w+)\s+(['’](?:s|re|ve|ll|d|m|t))\b", r"\1\2", text, flags=re.IGNORECASE)
+
+    # 3. Fix dropped 'g' dialect (e.g., "swarmin ’" -> "swarmin'")
+    text = re.sub(r"\b(\w+in)\s+(['’])(?!\w)", r"\1\2", text, flags=re.IGNORECASE)
+
+    # 4. Fix spacing around punctuation (UPDATED FOR CURLY QUOTES)
+    # Removes space BEFORE closing punctuation, including curly closing quotes/apostrophes
+    text = re.sub(r"\s+([,.!?;:\"')\]}’”])", r"\1", text)
+    # Removes space AFTER opening punctuation, including curly opening quotes
+    text = re.sub(r"([(\[{“‘])\s+", r"\1", text)
+
+    # 5. Fix double spaces and cleanup
+    text = re.sub(r"\s{2,}", " ", text)
+
+    return text.strip()
+
+
+def generate_characters_json(
+    characters: list,
+    output_path: str,
+    voice_assignments: dict | None = None,
+) -> str:
+    """Generate characters_simple.json with voice assignments.
+
+    Args:
+        characters: List of character dicts.
+        output_path: Path to write the JSON file.
+        voice_assignments: Optional dict mapping character names to voice paths.
+
+    Returns:
+        Path to the generated JSON file.
+    """
+    if voice_assignments:
+        for char in characters:
+            name = char.get("normalized_name", "")
+            if name in voice_assignments:
+                char["voice"] = voice_assignments[name]
+
+    result = {"characters": characters}
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+
+    return output_path
+
+
+def generate_sml_macros(
+    characters: list,
+    output_path: str,
+    voice_assignments: dict | None = None,
+) -> str:
+    """Generate the macro JSON file mapping character names to voice paths.
+
+    Args:
+        characters: List of character dicts.
+        output_path: Path to write the JSON file.
+        voice_assignments: Optional dict mapping character names to voice paths.
+
+    Returns:
+        Path to the generated JSON file.
+    """
+    voice_map = _build_voice_map(characters, voice_assignments)
+
+    macros_data = {
+        "macros": {
+            "voices": voice_map
+        }
+    }
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(macros_data, f, indent=4, ensure_ascii=False)
+
+    return output_path
+
+
+def _build_voice_map(
+    characters: list, voice_assignments: dict | None = None
+) -> dict:
+    """Build a mapping of character names to voice file paths.
+
+    Args:
+        characters: List of character dicts with potential voice fields.
+        voice_assignments: Optional override dict mapping names to voice paths.
+
+    Returns:
+        Dict mapping character normalized_name to voice file path.
+    """
+    voice_map = {}
+
+    # First, collect from character data
+    for char in characters:
+        name = char.get("normalized_name", "")
+        voice = char.get("voice")
+        if name and voice:
+            voice_map[name] = voice
+
+    # Override with explicit assignments
+    if voice_assignments:
+        voice_map.update(voice_assignments)
+
+    return voice_map
