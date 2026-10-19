@@ -97,6 +97,22 @@ needed. Output is 24 kHz mono.
   through `generate_voice_clone` does not reach it, so it would print once per
   sentence. It reports correct behaviour (pad = eos is what transformers picks).
   Only that record is dropped; other warnings from the same logger still print.
+- **The engine's only spacing rules are the SML ones.** Qwen3-TTS pads every fragment
+  it generates with leading and trailing silence (measured 200–500 ms per side), and a
+  sentence is one fragment per `[voice:…]`/`[/voice]` run. Untouched, those paddings used
+  to pile up with the tag silences and with the punctuation pause into seconds of dead
+  air between two speakers. So `convert()`:
+  - trims each generated fragment with `trim_audio()` (falling back to the raw audio if
+    nothing survives the threshold, instead of failing the sentence),
+  - appends the 0.3–0.6 s punctuation pause only when nothing else already pauses there —
+    `_silence_follows()` looks past structural tags (`voice`, `emotion`) and past
+    punctuation-only fragments to see whether a `[break]`/`[pause]` is coming — and
+    always on the last fragment that carries words (`last_audible`), otherwise two
+    sentences would be glued together now that the trailing padding is gone,
+  - tops the silence already at the tail up to 0.3–0.5 s before a fragment whose voice
+    differs from the previous one (`previous_voice` + `_trailing_silence()`), because a
+    speaker change is a pause of its own. A `[break]`/`[pause]` next to a switch still
+    wins: the top-up only adds what is missing.
 - `unload_tts_manager()` needs no `engine.unload()`; it drops `loaded_tts[key]`
   and frees the GPU.
 

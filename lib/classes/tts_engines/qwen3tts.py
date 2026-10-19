@@ -118,6 +118,37 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
             error = f'load_engine() error: {e}'
             raise RuntimeError(error) from e
 
+    def _trailing_silence(self)->float:
+        # seconds of silence sitting at the end of self.audio_segments
+        import torch
+        total = 0.0
+        for segment in reversed(self.audio_segments):
+            if torch.count_nonzero(segment) == 0:
+                total += segment.shape[-1] / self.params['samplerate']
+            else:
+                break
+        return total
+
+    @classmethod
+    def _silence_follows(cls, sentence_parts:list[str], index:int)->bool:
+        # True when the next thing that produces audio after sentence_parts[index] is an
+        # explicit [break]/[pause] tag: those insert silence of their own, so the
+        # punctuation pause must not be stacked on top of them.
+        for nxt in sentence_parts[index + 1:]:
+            m = SML_TAG_PATTERN.fullmatch(nxt)
+            if m is None:
+                # plain text is audible unless it is punctuation-only, which the render
+                # loop skips for exactly the same reason (no alphanumeric characters)
+                if any(c.isalnum() for c in nxt):
+                    return False
+                continue
+            tag = m.group('tag')
+            if tag in ('break', 'pause'):
+                return True
+            if tag not in ('voice', 'emotion'):
+                return False
+        return False
+
     def _voice_clone_prompt(self, ref_audio:str)->Any:
         prompts = self.params['voice_clone_prompts']
         if ref_audio in prompts:
@@ -141,7 +172,15 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                     if self.params['current_voice'] is None and error is not None:
                         return False, error
                 self.audio_segments = []
-                for part in sentence_parts:
+                # the last fragment that carries words (same alnum test as below): it must
+                # leave a pause behind it, otherwise two sentences would be glued together
+                # once the per-fragment padding is trimmed away
+                last_audible = max(
+                    (i for i, p in enumerate(sentence_parts) if any(c.isalnum() for c in p.strip())),
+                    default=-1
+                )
+                previous_voice = None
+                for index, part in enumerate(sentence_parts):
                     part = part.strip()
                     if not part:
                         continue
@@ -157,6 +196,13 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                             part = part[:-1]
                         ref_audio = self.params['current_voice']
                         part_sr = self.params['samplerate']
+                        if previous_voice is not None and ref_audio != previous_voice:
+                            # a speaker change is a pause of its own: top up whatever silence
+                            # is already there to a short gap, so the new voice does not start
+                            # on the heels of the previous one
+                            gap = int(np.random.uniform(0.3, 0.5) * 100) / 100 - self._trailing_silence()
+                            if gap > 0:
+                                self.audio_segments.append(torch.zeros(1, int(self.params['samplerate'] * gap)))
                         try:
                             with torch.inference_mode():
                                 try:
@@ -179,7 +225,15 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                             if audio_part is not None and is_audio_data_valid(audio_part):
                                 if part_sr and part_sr != self.params['samplerate']:
                                     audio_part = self._resample_audiodata(audio_part, part_sr, self.params['samplerate'])
-                                part_tensor = self._tensor_type(audio_part).unsqueeze(0)
+                                part_tensor = self._tensor_type(audio_part)
+                                # Qwen3-TTS pads every fragment it generates (200-500 ms of
+                                # leading silence and as much trailing); inside a multi-voice
+                                # sentence those paddings piled up with the [break]/[pause]/
+                                # punctuation silences into seconds of dead air.
+                                trimmed = trim_audio(part_tensor, self.params['samplerate'])
+                                if trimmed.numel() == 0:
+                                    trimmed = part_tensor
+                                part_tensor = trimmed.unsqueeze(0)
                                 if part_tensor.numel() == 0:
                                     error = 'part_tensor not valid'
                                     return False, error
@@ -187,7 +241,16 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                                 if emotion_gain and float(emotion_gain) != 1.0:
                                     part_tensor = part_tensor * float(emotion_gain)
                                 self.audio_segments.append(part_tensor)
-                                if not re.search(r'\w$', part, flags=re.UNICODE) and part[-1] != '—':
+                                previous_voice = ref_audio
+                                # a fragment that does not end on a word gets a pause of its own,
+                                # but only when nothing else already pauses for it: stacking the
+                                # punctuation pause on top of a [break]/[pause] (or on the last
+                                # fragment, whose trailing padding is trimmed away) is what made
+                                # the switches sound like long gaps.
+                                if not self._silence_follows(sentence_parts, index) and (
+                                    index == last_audible
+                                    or (not re.search(r'\w$', part, flags=re.UNICODE) and part[-1] != '—')
+                                ):
                                     silence_time = int(np.random.uniform(0.3, 0.6) * 100) / 100
                                     self.audio_segments.append(torch.zeros(1, int(self.params['samplerate'] * silence_time)))
                             else:
