@@ -145,6 +145,10 @@ def build_interface(args:dict)->gr.Blocks:
                         # one path: analyse the book, describe and cast the characters,
                         # listen to a single line of each, then synthesize the whole book
                         with gr.Group(elem_id='gr_group_sml_wizard') as gr_group_sml_wizard:
+                            gr_sml_css = gr.HTML(
+                                value='<style>#gr_sml_characters table td:nth-child(5) { max-width: 300px; white-space: normal; word-break: break-word; }</style>',
+                                elem_id='gr_sml_css'
+                            )
                             gr_sml_markdown = gr.Markdown(
                                 '### 🎭 Озвучка с ролями (SML)\n'
                                 'Загрузите книгу или вставьте текст выше, затем: «Анализ книги» → '
@@ -4039,6 +4043,7 @@ def build_interface(args:dict)->gr.Blocks:
             def _click_gr_sml_listen_btn(session_id, name):
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
+                print(f"[SML] listen btn clicked: session={session_id}, name={name}")
                 text = wizard.sample(session, name)
                 if not text:
                     return gr.update(), 'Нет реплики для прослушивания: сначала нажмите «Анализ книги».'

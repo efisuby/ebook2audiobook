@@ -17,7 +17,7 @@ import os
 import wave
 from collections import OrderedDict
 
-from sml_extractor import pipeline
+from sml_extractor import pipeline, sml_generator
 from sml_extractor.voice_matcher import scan_voice_library
 
 # ISO-639-3 codes BookNLP ships models for (see sml_extractor.core).
@@ -208,6 +208,15 @@ def analyze(session, model: str = "small", use_llm: bool = True, progress=None,
         found, booknlp_data, language=book_language, use_llm=use_llm,
         progress=_scaled(progress, 0.8, 1.0),
     )
+
+    # compute and store lines count for each character so it survives session restore
+    lines = {}
+    for speaker, _text in sml_generator.collect_speech_segments(booknlp_data):
+        lines[speaker] = lines.get(speaker, 0) + 1
+    for character in found:
+        name = character.get("normalized_name")
+        if name:
+            character["lines"] = lines.get(name, 0)
 
     forget_book(session)
     session["sml_output_dir"] = output_dir
