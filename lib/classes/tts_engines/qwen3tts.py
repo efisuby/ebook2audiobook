@@ -2,7 +2,27 @@ from lib.classes.tts_engines.common.headers import *
 from lib.classes.tts_engines.common.preset_loader import load_engine_presets
 from lib.lang import legends
 
+import logging
+
 #sys.stderr = StdoutFilter(sys.stdout)
+
+class _OpenEndPadWarningFilter(logging.Filter):
+    # transformers warns from generation/utils.py (_prepare_special_tokens) whenever a
+    # generate() call leaves pad_token_id unset, then sets it to eos: "Setting
+    # `pad_token_id` to `eos_token_id`:2150 for open-end generation." The id lives in a
+    # nested Qwen3-TTS generation config, and passing pad_token_id through
+    # generate_voice_clone does not reach it, so the line repeats for every sentence.
+    # Nothing is wrong: pad = eos is what transformers picks anyway. Drop only that
+    # record, any other warning from the same logger still prints.
+    def filter(self, record:logging.LogRecord)->bool:
+        return 'for open-end generation' not in record.getMessage()
+
+
+def _silence_open_end_pad_warning()->None:
+    logger = logging.getLogger('transformers.generation.utils')
+    if not any(isinstance(f, _OpenEndPadWarningFilter) for f in logger.filters):
+        logger.addFilter(_OpenEndPadWarningFilter())
+
 
 class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
 
@@ -86,6 +106,7 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                 except Exception as e:
                     error = f'load_engine(): failed to load {self.model_path}: {e}'
                     raise RuntimeError(error) from e
+                _silence_open_end_pad_warning()
                 loaded_tts[self.tts_key] = engine
             if engine:
                 msg = legends['msg_tts_loaded'].format(model=self.tts_key)

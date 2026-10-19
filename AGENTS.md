@@ -91,6 +91,12 @@ needed. Output is 24 kHz mono.
   `default_engine_settings`. `visible_xtts` / `visible_bark` stay `False` for it.
 - `attn_implementation="flash_attention_2"` is deliberately **not** passed, to
   avoid a hard flash-attn dependency.
+- `load_engine()` installs a logging filter that drops transformers' per-call
+  "Setting `pad_token_id` to `eos_token_id`… for open-end generation" warning: the id
+  it fills in lives in a nested Qwen3-TTS generation config and passing `pad_token_id`
+  through `generate_voice_clone` does not reach it, so it would print once per
+  sentence. It reports correct behaviour (pad = eos is what transformers picks).
+  Only that record is dropped; other warnings from the same logger still print.
 - `unload_tts_manager()` needs no `engine.unload()`; it drops `loaded_tts[key]`
   and frees the GPU.
 
