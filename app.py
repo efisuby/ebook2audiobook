@@ -217,6 +217,7 @@ SML tags available:
 [pause] — silence (random range 1.0–1.6 sec.)
 [pause:N] — fixed pause (N sec.)
 [voice:/path/to/voice/file]...[/voice] — switch voice from default or selected voice from GUI/CLI
+[emotion:LABEL]...[/emotion] — tune temperature/top_p/speed and volume gain for the enclosed text
 ''',
         formatter_class=argparse.RawTextHelpFormatter
     )

@@ -171,7 +171,7 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 ### Instructions 
 1. **Clone repo**
 	```bash
-	git clone https://github.com/DrewThomasson/ebook2audiobook.git
+	git clone https://github.com/efisuby/ebook2audiobook.git
 	cd ebook2audiobook
 	```
 
@@ -376,7 +376,7 @@ SML tags available:
 ### Docker
 1. **Clone the Repository**:
 ```bash
-   git clone https://github.com/DrewThomasson/ebook2audiobook.git
+   git clone https://github.com/efisuby/ebook2audiobook.git
    cd ebook2audiobook
 ```
 2. **Build the container**

@@ -171,7 +171,7 @@ So you should first remove manually any text you don't want to be converted in a
 ### Instructions 
 1. **Clone repo**
 	```bash
-	git clone https://github.com/DrewThomasson/ebook2audiobook.git
+	git clone https://github.com/efisuby/ebook2audiobook.git
 	cd ebook2audiobook
 	```
 
@@ -376,7 +376,7 @@ TIP: if it needs some more pause, add '[pause:3]' for 3 sec. etc.
 ### Docker
 1. **Clone the Repository**:
 ```bash
-   git clone https://github.com/DrewThomasson/ebook2audiobook.git
+   git clone https://github.com/efisuby/ebook2audiobook.git
    cd ebook2audiobook
 ```
 2. **Build the container**
