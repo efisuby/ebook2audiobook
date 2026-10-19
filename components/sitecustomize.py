@@ -14,21 +14,25 @@ It replaces torchaudio.load ONLY if/when torchaudio is imported (avoids torchcod
 DLL load failures on PyTorch ROCm/Windows builds).
 
 Contract with device_installer.select_pkg('transformers'):
-the installer only caps transformers under the installed torch floor (<5.1 for
-torch<2.4, <5.8 for torch<2.5, uncapped above), so every device tag resolves to
-transformers 5.x + huggingface_hub 1.x. That is only valid because the patches
-below cover what the older stacks still expect:
+the whole runtime is pinned to transformers==4.57.3 — the Qwen3-TTS engine needs the
+qwen-tts package, which only runs against the 4.57 API (5.x removed
+@check_model_inputs() without arguments and the PretrainedConfig defaults it relies
+on). 4.57.3 also drags huggingface-hub below 1.0, which gradio==6.29.1 (declares
+huggingface-hub>=1.16.0) does not allow, so the installer forces the older hub
+through a uv --overrides file. The patches below are what the older stacks expect on
+this pin; each one only fires when the API it repairs is missing or misbehaving, so
+they stay harmless if the pin ever moves back to transformers 5.x + hub 1.x:
 • check_torch_load_is_safe → torch.load (.bin checkpoints) requires torch>=2.6 in every
   transformers release, 4.57.6 included; macOS x86_64 (2.2.2) and jetson (2.4.x/2.5.0)
   are below. No pin can replace this patch.
-• isin_mps_friendly        → removed in transformers 5.1, still imported by coqui-tts
-  tortoise. Without it: cap transformers<5.1 on every tag.
+• isin_mps_friendly        → still present in 4.57, removed in transformers 5.1, imported
+  by coqui-tts tortoise. The patch only fills the gap if it is missing.
 • GPT2InferenceModel mask  → transformers 5.18 drops an all-1s attention_mask in generate(),
   but coqui-tts tortoise AND xtts GPT2InferenceModel.forward read attention_mask.shape[1] on
-  every cached (1-token) step. Without it: cap transformers<5.18 on every tag. No-op once
+  every cached (1-token) step. Only fires when the mask is missing. No-op once
   coqui-tts ships the upstream fix (idiap/coqui-ai-TTS#592).
-• use_auth_token → token   → removed in huggingface_hub 1.x, still passed by pyannote 3.4
-  (torch<2.9 branch). Without it: transformers==4.57.6 + huggingface_hub<1.0 there.
+• use_auth_token → token   → both spellings exist in huggingface_hub<1.0; kept for the
+  pyannote 3.4 branch (torch<2.9) and for a move back to hub 1.x.
 
 Compatible with Python 3.10 → 3.14.
 """

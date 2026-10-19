@@ -51,9 +51,12 @@ torchvggish
 pyannote-audio
 demucs-simple
 huggingface-hub
-# Qwen3-TTS engine. Installed with --no-deps by the device installer so its
-# transformers==4.57.3 pin cannot drag the runtime back from the transformers
-# 5.x line the sitecustomize patches target; its runtime deps are listed here.
+# Qwen3-TTS engine. Installed with --no-deps by the device installer; its runtime
+# deps are listed here. Its own metadata asks for transformers==4.57.3 and
+# huggingface-hub<1.0, so the installer pins transformers==4.57.3 for the whole
+# runtime and forces huggingface-hub<1.0 through a uv --overrides file (gradio
+# above declares huggingface-hub>=1.16.0, which the resolver cannot satisfy
+# together with 4.57.3). See AGENTS.md.
 qwen-tts
 accelerate
 librosa

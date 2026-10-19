@@ -8,9 +8,9 @@ from lib.lang import legends
 
 class DeviceInstaller():
     device_pkgs = ['onnxruntime', 'transformers']
-    # Installed with --no-deps: their runtime deps ship in requirements.txt, and
-    # their own pins would otherwise drag transformers back from the 5.x line the
-    # sitecustomize patches target (qwen-tts asks for transformers==4.57.3).
+    # Installed with --no-deps: their runtime deps ship in requirements.txt, so the
+    # resolver must not follow their own pins (qwen-tts asks for transformers==4.57.3,
+    # which select_pkg('transformers') pins globally anyway).
     no_deps_pkgs = ['qwen-tts']
     torchaudio_max = '2.11.0'
     # installed torch below the key -> transformers must stay below the value.
@@ -26,6 +26,12 @@ class DeviceInstaller():
         'onnxruntime': ['onnxruntime', 'onnxruntime-gpu', 'onnxruntime-directml']
     }
     pip_cache_dir = os.environ.get('E2A_PIP_CACHE_DIR') or os.path.join(tempfile.gettempdir(), 'e2a_pip_cache')
+    # transformers==4.57.3 (see select_pkg) needs huggingface-hub<1.0 while
+    # gradio==6.29.1 declares huggingface-hub>=1.16.0, so a plain resolve of
+    # requirements.txt can satisfy neither: every install call carries this override
+    # file and forces the older hub. gradio imports and runs on it (verified with
+    # 6.29.1 + 0.36.2); the alternative was pinning gradio back to the 5.x line.
+    pip_overrides = {'huggingface-hub': '<1.0'}
 
     def __init__(self):
         self.system = sys.platform
@@ -53,7 +59,21 @@ class DeviceInstaller():
         raise FileNotFoundError('uv binary not found. Install: https://docs.astral.sh/uv/getting-started/installation/')
 
     def _uv_pip(self, subcommand:str, *args)->list:
-        return [self.uv_bin, 'pip', subcommand, '--python', python_exec, *args]
+        override_args = []
+        if subcommand == 'install' and self.pip_overrides:
+            override_args = ['--overrides', self.overrides_file]
+        return [self.uv_bin, 'pip', subcommand, '--python', python_exec, *override_args, *args]
+
+    @cached_property
+    def overrides_file(self)->str:
+        # uv refuses to resolve a request whose declared deps conflict (gradio vs
+        # huggingface-hub above), so the conflicting pin is carried in this file.
+        os.makedirs(self.pip_cache_dir, exist_ok=True)
+        path = os.path.join(self.pip_cache_dir, 'e2a-overrides.txt')
+        with open(path, 'w') as f:
+            for pkg, spec in sorted(self.pip_overrides.items()):
+                f.write(f'{pkg}{spec}\n')
+        return path
 
     @cached_property
     def check_platform(self)->str:
@@ -1586,10 +1606,11 @@ class DeviceInstaller():
 
     def has_torchcodec_stack(self)->bool:
         # single source of truth for the whole dependency universe:
-        #   torch >= 2.9 -> torchcodec exists -> pyannote 4 -> hub 1.x -> transformers 5
-        #   torch <  2.9 -> no torchcodec     -> pyannote 3.4.0 -> hub 1.x (use_auth_token via sitecustomize)
-        # transformers itself is not part of this split: it follows the torch floor,
-        # see select_pkg('transformers') and transformers_caps.
+        #   torch >= 2.9 -> torchcodec exists -> pyannote 4 (a fresh resolve would also
+        #                   pull huggingface-hub 2.x there, which gradio allows)
+        #   torch <  2.9 -> no torchcodec     -> pyannote 3.4.0 (use_auth_token via sitecustomize)
+        # transformers itself is pinned globally (4.57.3) for the Qwen3-TTS engine,
+        # see select_pkg('transformers').
         # torch_matrix tags with codec '' (cu118/cu121/cu124, rocm<=6.2.4, jetson*)
         # top out below 2.9 and must stay on the old branch.
         # (2, 9) is the same boundary _needs_reinstall() uses to decide whether
@@ -1657,22 +1678,15 @@ class DeviceInstaller():
                 return 'onnxruntime-directml'
             case 'transformers':
                 # not in requirements.txt: it arrives through coqui-tts (transformers>=4.57,
-                # no upper bound), so left alone the resolver takes the newest release even
-                # when the installed torch is below its floor, and transformers then disables
-                # PyTorch at import:
-                #   Disabling PyTorch because PyTorch >= 2.5 is required but found 2.2.2
-                # the torch floor is the only thing arbitrated here. The rest of what the
-                # older stacks need from transformers 5.x / huggingface_hub 1.x is patched at
-                # runtime by sitecustomize.py (check_torch_load_is_safe for torch<2.6,
-                # isin_mps_friendly for coqui-tts tortoise, use_auth_token for pyannote 3.4).
-                # listed in device_pkgs so the cap rides along on every install call and
+                # no upper bound), so left alone the resolver takes the newest release.
+                # The whole runtime is held at 4.57.3 because the Qwen3-TTS engine needs the
+                # `qwen-tts` package, which pins transformers==4.57.3 and uses the 4.57 API
+                # (`@check_model_inputs()` used bare, plus PretrainedConfig defaults such as
+                # pad_token_id) that transformers 5.x removed. 4.57.3 is below every
+                # transformers_caps entry, so the old-torch caps stay satisfied by it.
+                # listed in device_pkgs so the pin rides along on every install call and
                 # coqui-tts cannot drag transformers back above it.
-                torch_version = self.get_package_version('torch') or ''
-                if torch_version:
-                    for torch_floor, transformers_cap in self.transformers_caps.items():
-                        if self.version_tuple(torch_version, 2) < self.version_tuple(torch_floor, 2):
-                            return f'transformers<{transformers_cap}'
-                return 'transformers'
+                return 'transformers==4.57.3'
             case _:
                 raise ValueError(f'select_pkg(): no rule for {pkg}')
 

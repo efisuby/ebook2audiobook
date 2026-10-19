@@ -70,7 +70,7 @@ needed. Output is 24 kHz mono.
 | `lib/classes/tts_engines/qwen3tts.py` | New engine. `load_engine()` builds `Qwen3TTSModel.from_pretrained(..., device_map, dtype, cache_dir)`; `_voice_clone_prompt()` caches `create_voice_clone_prompt(ref_audio=…, x_vector_only_mode=True)` per voice; `convert()` splits on SML, honours `[voice:…]`/`[emotion:…]` and calls `generate_voice_clone(text, language, voice_clone_prompt)`. |
 | `lib/classes/tts_engines/__init__.py` | `from .qwen3tts import Qwen3TTS` (this is what registers the engine). |
 | `requirements.txt` | `qwen-tts` plus its runtime deps (`accelerate`, `librosa`, `einops`, `sox`). |
-| `lib/classes/device_installer.py` | `no_deps_pkgs = ['qwen-tts']`; those packages are installed with `--no-deps`. |
+| `lib/classes/device_installer.py` | `no_deps_pkgs = ['qwen-tts']` (installed with `--no-deps`); `select_pkg('transformers')` returns the global pin `transformers==4.57.3` and `pip_overrides` forces `huggingface-hub<1.0` through a uv `--overrides` file. |
 | `README.md`, `readme/README_rus.md` | `Qwen3-TTS` ticked in the engines list + a short usage note. |
 
 ### Design notes for future edits
@@ -83,10 +83,9 @@ needed. Output is 24 kHz mono.
   this engine only through `self.params["emotion_gain"]` (applied in
   `convert()`), and the `[emotion:…]` branch in `_convert_sml` is a safe no-op
   for the tuned params.
-- `qwen-tts` pins an old `transformers`; it is installed with `--no-deps` so it
-  cannot drag the runtime back from the transformers 5.x line that
-  `components/sitecustomize.py` patches. Its runtime dependencies must stay
-  listed in `requirements.txt`.
+- `qwen-tts` targets an old `transformers`; it is installed with `--no-deps` and
+  its runtime dependencies must stay listed in `requirements.txt`. The runtime is
+  held at `transformers==4.57.3` for it (see the next section), not at 5.x.
 - No Gradio param tab is needed: the engine shows up in the dropdown through
   `get_compatible_tts_engines(language)`, derived from the `languages` map in
   `default_engine_settings`. `visible_xtts` / `visible_bark` stay `False` for it.
@@ -103,3 +102,29 @@ python -c "import ast; [ast.parse(open(p).read()) for p in ('lib/conf_models.py'
 
 A live run needs `pip install --no-deps qwen-tts accelerate librosa einops sox`
 and the `Qwen/Qwen3-TTS-12Hz-1.7B-Base` weights (~4.5 GB).
+
+## Fork change: transformers pinned to 4.57.3
+
+`qwen-tts` does not run on transformers 5.x: 5.x turned `@check_model_inputs()` into
+`check_model_inputs(func)`, and removed the `PretrainedConfig` defaults the qwen
+configs read (`pad_token_id`). Shimming the decorator only moves the failure one
+step further, so the whole runtime is pinned instead.
+
+| Pin | Where | Why |
+|-----|-------|-----|
+| `transformers==4.57.3` | `device_installer.select_pkg('transformers')` (it is in `device_pkgs`, so the pin rides along on every install call) | the only line `qwen-tts` supports |
+| `tokenizers==0.22.2` | resolved automatically as a dependency | 4.57.3 aborts at import above `tokenizers==0.23.0`; the 0.23.0 release does not exist (0.23.0rc0, then 0.23.1…), so 0.22.2 is the newest allowed |
+| `huggingface-hub<1.0` (0.36.2) | `device_installer.pip_overrides`, written to a uv `--overrides` file in `pip_cache_dir` | 4.57.3 declares `hub<1.0` (it imports `HTTPError` from `huggingface_hub.utils` and expects hub errors to subclass `requests.HTTPError` — both gone in hub 1.x/2.x), while `gradio==6.29.1` declares `hub>=1.16.0`. The resolver cannot satisfy both, so the override forces the older hub. gradio 6.29.1 imports, starts and runs on 0.36.2 (verified); E2A itself only uses hub via `hf_hub_download` / `snapshot_download` / `get_hf_file_metadata` / `hf_hub_url`, all present in both lines. |
+
+Consequences to keep in mind:
+
+- The transformers 5.x patches in `components/sitecustomize.py` are inert on this pin
+  but must stay: they repair torch<2.6 `check_torch_load_is_safe`, the coqui-tts
+  `isin_mps_friendly` import and the GPT2InferenceModel all-1s attention_mask.
+- `--overrides` is only added to `uv pip install` (see `_uv_pip`), never to `uninstall`.
+- Verified end to end on this stack (torch 2.14.1+cu130, CUDA): a headless `qwen3tts`
+  run, a headless `xtts` run, and the qwen3tts engine smoke test (5 cases, with the
+  `[emotion:…]` gain applied).
+- After any transformers or gradio bump re-check both engines: transformers must stay
+  below 5 unless `qwen-tts` ships a 5.x-capable release, and gradio must stay on a
+  version that runs with `huggingface-hub<1.0`.
