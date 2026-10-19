@@ -103,7 +103,7 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 
 
 ## Features
-- 🔧 **TTS Engines supported**: `XTTSv2`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
+- 🔧 **TTS Engines supported**: `XTTSv2`, `Qwen3-TTS`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
 - 📚 **Convert multiple file formats**: `.epub`, `.mobi`, `.azw3`, `.fb2`, `.lrf`, `.rb`, `.snb`, `.tcr`, `.pdf`, `.txt`, `.rtf`, `.doc`, `.docx`, `.html`, `.odt`, `.azw`, `.tiff`, `.tif`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.zip`
 - 💻 **TextArea** to convert directly a short text in audio
 - 🔍 **OCR scanning** for files with text pages as images
@@ -441,6 +441,25 @@ It doesn't matter if the recording has a noisy background or music playing over 
 The built-in cloned voices list is mainly in English. If you need voices in other languages to be officially
 added to the list, please contact us and we'll add them after review.
 
+### Qwen3-TTS
+`Qwen3-TTS` clones the voice of the reference `.wav` that is cast to each character, using
+`Qwen/Qwen3-TTS-12Hz-1.7B-Base` (a lighter `Qwen/Qwen3-TTS-12Hz-0.6B-Base` preset is also available,
+selectable in the fine tuned models list). Because E2A has no transcript for a reference voice, the cloning is
+done in x-vector-only mode and needs no reference text. Output is 24 kHz mono and the supported languages are
+Chinese, English, German, Italian, Portuguese, Spanish, Japanese, Korean, French and Russian.
+
+The engine ignores the temperature/top_p/speed style overrides (Qwen exposes no such surface), but it still
+honours the `[emotion:...]` SML tag as a volume gain, and the `[voice:...]` tag / per-character casting work
+exactly like with XTTSv2.
+
+The `qwen-tts` python package pins an older `transformers`, so the device installer installs it with `--no-deps`
+and its runtime dependencies are listed directly in `requirements.txt`. Installing it manually, keep that in mind:
+
+```bash
+pip install --no-deps qwen-tts
+pip install accelerate librosa einops sox
+```
+
 ## Fine Tuned TTS models
 #### Fine Tune your own TTS model
 
@@ -538,7 +557,7 @@ git checkout tags/VERSION_NUM # Locally/Compose -> Example: git checkout tags/v2
 - [ ] Orpheus-TTS (https://github.com/canopyai/Orpheus-TTS)
 - [ ] NewTTS (https://github.com/neuphonic/neutts?tab=readme-ov-file)
 - [ ] VIbeVoice (https://github.com/vibevoice-community/VibeVoice)
-- [ ] Qwen3-TTS (https://huggingface.co/spaces/Qwen/Qwen3-TTS)
+- [x] Qwen3-TTS (https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
 
 #### Readme Translation
 - [x] Arabic (ara)

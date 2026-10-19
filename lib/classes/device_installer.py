@@ -8,6 +8,10 @@ from lib.lang import legends
 
 class DeviceInstaller():
     device_pkgs = ['onnxruntime', 'transformers']
+    # Installed with --no-deps: their runtime deps ship in requirements.txt, and
+    # their own pins would otherwise drag transformers back from the 5.x line the
+    # sitecustomize patches target (qwen-tts asks for transformers==4.57.3).
+    no_deps_pkgs = ['qwen-tts']
     torchaudio_max = '2.11.0'
     # installed torch below the key -> transformers must stay below the value.
     # 2.4: 5.1+ declares torch>=2.4 and silently disables PyTorch below it.
@@ -1419,6 +1423,16 @@ class DeviceInstaller():
                             pins.append(pin)
                     except Exception:
                         pass
+                nodeps_packages = [pkg for pkg in missing_packages if self.pkg_head(pkg) in self.no_deps_pkgs]
+                if nodeps_packages:
+                    missing_packages = [pkg for pkg in missing_packages if self.pkg_head(pkg) not in self.no_deps_pkgs]
+                    for raw_pkg in nodeps_packages:
+                        try:
+                            subprocess.check_call(base_cmd + ['--no-deps', raw_pkg])
+                        except subprocess.CalledProcessError as e:
+                            msg = legends['msg_install_pkg_failed'].format(pkg=raw_pkg, e=e)
+                            print(msg)
+                            return 1
                 try:
                     subprocess.check_call(base_cmd + self.apply_pins(missing_packages, pins))
                 except subprocess.CalledProcessError:

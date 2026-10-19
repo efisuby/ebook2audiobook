@@ -52,3 +52,54 @@ modules in isolation:
 python -c "import ast; [ast.parse(open(p).read()) for p in ('lib/conf_models.py', 'lib/classes/tts_engines/common/utils.py', 'lib/classes/tts_engines/xtts.py')]"
 python -c "from lib.conf_models import TTS_SML, TTS_SML_EMOTIONS; print(list(TTS_SML), sorted(TTS_SML_EMOTIONS))"
 ```
+
+## Fork change: the Qwen3-TTS engine
+
+Adds a `qwen3tts` engine (`lib/classes/tts_engines/qwen3tts.py`,
+`class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts')`). It mirrors `xtts.py`
+and uses the **Base** voice-clone models, so the per-character reference `.wav`
+cast by E2A becomes the clone reference — x-vector-only, i.e. no transcript is
+needed. Output is 24 kHz mono.
+
+### Files touched
+
+| File | Change |
+|------|--------|
+| `lib/conf_models.py` | `TTS_ENGINES["QWEN3TTS"] = "qwen3tts"` and a `default_engine_settings` entry (same 17-language map as XTTS, `samplerate: 24000`, `files: []`, `rating`). |
+| `lib/classes/tts_engines/presets/qwen3tts_presets.py` | `models` with `"internal"` (`Qwen/Qwen3-TTS-12Hz-1.7B-Base`) and `"0.6B"` (`…-0.6B-Base`) presets, both `lang: "multi"`. |
+| `lib/classes/tts_engines/qwen3tts.py` | New engine. `load_engine()` builds `Qwen3TTSModel.from_pretrained(..., device_map, dtype, cache_dir)`; `_voice_clone_prompt()` caches `create_voice_clone_prompt(ref_audio=…, x_vector_only_mode=True)` per voice; `convert()` splits on SML, honours `[voice:…]`/`[emotion:…]` and calls `generate_voice_clone(text, language, voice_clone_prompt)`. |
+| `lib/classes/tts_engines/__init__.py` | `from .qwen3tts import Qwen3TTS` (this is what registers the engine). |
+| `requirements.txt` | `qwen-tts` plus its runtime deps (`accelerate`, `librosa`, `einops`, `sox`). |
+| `lib/classes/device_installer.py` | `no_deps_pkgs = ['qwen-tts']`; those packages are installed with `--no-deps`. |
+| `README.md`, `readme/README_rus.md` | `Qwen3-TTS` ticked in the engines list + a short usage note. |
+
+### Design notes for future edits
+
+- **The preset key `internal` is mandatory**: `default_fine_tuned = 'internal'`,
+  `_update_gr_fine_tuned_list` falls back to it, and `_restore_interface` reads
+  `models[default_fine_tuned]['files']`.
+- No `qwen3tts_*` session keys were added (unlike `xtts_*`), so
+  `self.fine_tuned_params = {}`. The `[emotion:LABEL]` tag therefore reaches
+  this engine only through `self.params["emotion_gain"]` (applied in
+  `convert()`), and the `[emotion:…]` branch in `_convert_sml` is a safe no-op
+  for the tuned params.
+- `qwen-tts` pins an old `transformers`; it is installed with `--no-deps` so it
+  cannot drag the runtime back from the transformers 5.x line that
+  `components/sitecustomize.py` patches. Its runtime dependencies must stay
+  listed in `requirements.txt`.
+- No Gradio param tab is needed: the engine shows up in the dropdown through
+  `get_compatible_tts_engines(language)`, derived from the `languages` map in
+  `default_engine_settings`. `visible_xtts` / `visible_bark` stay `False` for it.
+- `attn_implementation="flash_attention_2"` is deliberately **not** passed, to
+  avoid a hard flash-attn dependency.
+- `unload_tts_manager()` needs no `engine.unload()`; it drops `loaded_tts[key]`
+  and frees the GPU.
+
+### How to check
+
+```bash
+python -c "import ast; [ast.parse(open(p).read()) for p in ('lib/conf_models.py', 'lib/classes/tts_engines/qwen3tts.py', 'lib/classes/tts_engines/presets/qwen3tts_presets.py', 'lib/classes/tts_engines/__init__.py', 'lib/classes/device_installer.py')]"
+```
+
+A live run needs `pip install --no-deps qwen-tts accelerate librosa einops sox`
+and the `Qwen/Qwen3-TTS-12Hz-1.7B-Base` weights (~4.5 GB).

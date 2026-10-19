@@ -103,7 +103,7 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 
 
 ## Возможности
-- 🔧 **Поддерживаемые движки TTS**: `XTTSv2`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
+- 🔧 **Поддерживаемые движки TTS**: `XTTSv2`, `Qwen3-TTS`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
 - 📚 **Преобразование нескольких форматов файлов**: `.epub`, `.mobi`, `.azw3`, `.fb2`, `.lrf`, `.rb`, `.snb`, `.tcr`, `.pdf`, `.txt`, `.rtf`, `.doc`, `.docx`, `.html`, `.odt`, `.azw`, `.tiff`, `.tif`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.zip`
 - 💻 **Текстовое поле** для прямого преобразования короткого текста в аудио
 - 🔍 **Сканирование OCR** для файлов с текстовыми страницами в виде изображений
@@ -441,6 +441,25 @@ Podman Compose (i.e. cuda 12.8:
 Встроенный список клонированных голосов в основном на английском языке. Если вам нужны голоса на других языках, чтобы быть официально
 добавлены в список, свяжитесь с нами, и мы добавим их после проверки.
 
+### Qwen3-TTS
+`Qwen3-TTS` клонирует голос из референсного `.wav`, назначенного каждому персонажу, используя модель
+`Qwen/Qwen3-TTS-12Hz-1.7B-Base` (в списке дообученных моделей есть и более лёгкий пресет
+`Qwen/Qwen3-TTS-12Hz-0.6B-Base`). Поскольку у E2A нет транскрипта референсного голоса, клонирование идёт в
+x-vector-only режиме и не требует текста референса. Выход — моно 24 кГц; поддерживаются китайский, английский,
+немецкий, итальянский, португальский, испанский, японский, корейский, французский и русский языки.
+
+Движок игнорирует переопределения temperature/top_p/speed (в Qwen такого интерфейса нет), но по-прежнему
+поддерживает SML-тег `[emotion:...]` как усиление громкости, а тег `[voice:...]` и раздача голосов по
+персонажам работают точно так же, как с XTTSv2.
+
+Пакет `qwen-tts` фиксирует более старую версию `transformers`, поэтому установщик ставит его с `--no-deps`,
+а его runtime-зависимости перечислены прямо в `requirements.txt`. При ручной установке учитывайте это:
+
+```bash
+pip install --no-deps qwen-tts
+pip install accelerate librosa einops sox
+```
+
 ## Дообученные (fine-tuned) модели TTS
 #### Тонкая настройка собственной модели TTS
 
@@ -538,7 +557,7 @@ git checkout tags/VERSION_NUM # Locally/Compose -> Example: git checkout tags/v2
 - [ ] Orpheus-TTS (https://github.com/canopyai/Orpheus-TTS)
 - [ ] NewTTS (https://github.com/neuphonic/neutts?tab=readme-ov-file)
 - [ ] VIbeVoice (https://github.com/vibevoice-community/VibeVoice)
-- [ ] Qwen3-TTS (https://huggingface.co/spaces/Qwen/Qwen3-TTS)
+- [x] Qwen3-TTS (https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
 
 #### Перевод Readme
 - [x] Арабский (ara)
