@@ -103,7 +103,7 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 
 
 ## Features
-- 🔧 **TTS Engines supported**: `XTTSv2`, `Qwen3-TTS`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
+- 🔧 **TTS Engines supported**: `XTTSv2`, `Qwen3-TTS`, `Silero`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
 - 📚 **Convert multiple file formats**: `.epub`, `.mobi`, `.azw3`, `.fb2`, `.lrf`, `.rb`, `.snb`, `.tcr`, `.pdf`, `.txt`, `.rtf`, `.doc`, `.docx`, `.html`, `.odt`, `.azw`, `.tiff`, `.tif`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.zip`
 - 💻 **TextArea** to convert directly a short text in audio
 - 🔍 **OCR scanning** for files with text pages as images
@@ -460,6 +460,18 @@ pip install --no-deps qwen-tts
 pip install accelerate librosa einops sox
 ```
 
+### Silero TTS
+`Silero TTS` is a small, fast CPU engine that needs no reference voice: the file cast to a character only
+selects one of the five built-in speakers of `v5_6_ru`. Voices living in a `…/adult/male/` folder map to
+`aidar`/`eugene` and voices in `…/adult/female/` to `baya`/`kseniya`/`xenia`, handed out round-robin so every
+character keeps its own speaker for the whole book. Only Russian is supported; `[voice:...]` and the
+`[emotion:...]` gain behave as with the other engines, while the temperature/top_p/speed overrides are ignored.
+
+The ~150 MB checkpoint is downloaded on first use from `models.silero.ai` into `models/tts/silero/v5_6_ru.pt` —
+no extra python package is installed, `torch` alone loads it. Output is 24 kHz mono. The weights are published
+under the **non-commercial CC BY-NC-SA 4.0** licence (the code is MIT), so check the terms before any commercial
+use.
+
 ## Fine Tuned TTS models
 #### Fine Tune your own TTS model
 
@@ -558,6 +570,7 @@ git checkout tags/VERSION_NUM # Locally/Compose -> Example: git checkout tags/v2
 - [ ] NewTTS (https://github.com/neuphonic/neutts?tab=readme-ov-file)
 - [ ] VIbeVoice (https://github.com/vibevoice-community/VibeVoice)
 - [x] Qwen3-TTS (https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
+- [x] Silero TTS (https://github.com/snakers4/silero-models)
 
 #### Readme Translation
 - [x] Arabic (ara)

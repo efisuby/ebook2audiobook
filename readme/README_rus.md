@@ -103,7 +103,7 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 
 
 ## Возможности
-- 🔧 **Поддерживаемые движки TTS**: `XTTSv2`, `Qwen3-TTS`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
+- 🔧 **Поддерживаемые движки TTS**: `XTTSv2`, `Qwen3-TTS`, `Silero`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
 - 📚 **Преобразование нескольких форматов файлов**: `.epub`, `.mobi`, `.azw3`, `.fb2`, `.lrf`, `.rb`, `.snb`, `.tcr`, `.pdf`, `.txt`, `.rtf`, `.doc`, `.docx`, `.html`, `.odt`, `.azw`, `.tiff`, `.tif`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.zip`
 - 💻 **Текстовое поле** для прямого преобразования короткого текста в аудио
 - 🔍 **Сканирование OCR** для файлов с текстовыми страницами в виде изображений
@@ -460,6 +460,19 @@ pip install --no-deps qwen-tts
 pip install accelerate librosa einops sox
 ```
 
+### Silero TTS
+`Silero TTS` — компактный и быстрый движок для CPU, которому не нужен референсный голос: назначенный персонажу
+файл лишь выбирает одного из пяти встроенных спикеров модели `v5_6_ru`. Голоса из каталога `…/adult/male/`
+превращаются в `aidar`/`eugene`, а из `…/adult/female/` — в `baya`/`kseniya`/`xenia`, и раздаются по кругу, так
+что каждый персонаж сохраняет своего спикера на всю книгу. Поддерживается только русский; `[voice:...]` и
+усиление `[emotion:...]` работают как у остальных движков, а переопределения temperature/top_p/speed
+игнорируются.
+
+Чекпойнт (~150 МБ) скачивается при первом использовании с `models.silero.ai` в `models/tts/silero/v5_6_ru.pt` —
+дополнительных python-пакетов не требуется, файл загружает сам `torch`. Выход — моно 24 кГц. Веса опубликованы
+под **некоммерческой лицензией CC BY-NC-SA 4.0** (код — MIT), поэтому перед коммерческим использованием
+проверьте условия.
+
 ## Дообученные (fine-tuned) модели TTS
 #### Тонкая настройка собственной модели TTS
 
@@ -558,6 +571,7 @@ git checkout tags/VERSION_NUM # Locally/Compose -> Example: git checkout tags/v2
 - [ ] NewTTS (https://github.com/neuphonic/neutts?tab=readme-ov-file)
 - [ ] VIbeVoice (https://github.com/vibevoice-community/VibeVoice)
 - [x] Qwen3-TTS (https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
+- [x] Silero TTS (https://github.com/snakers4/silero-models)
 
 #### Перевод Readme
 - [x] Арабский (ara)

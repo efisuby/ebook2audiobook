@@ -14,7 +14,8 @@ TTS_ENGINES = {
     "GLOWTTS": "glowtts",
     "TACOTRON": "tacotron",
     "YOURTTS": "yourtts",
-    "QWEN3TTS": "qwen3tts"
+    "QWEN3TTS": "qwen3tts",
+    "SILERO": "silero"
 }
 
 TTS_VOICE_CONVERSION = {
@@ -327,5 +328,14 @@ default_engine_settings = {
         "voice": default_speaker,
         "voices": {},
         "rating": {"VRAM": 6, "CPU": 2, "RAM": 6, "Realism": 5}
+    },
+    TTS_ENGINES['SILERO']: {
+        "repo": "https://models.silero.ai/models/tts/ru/v5_6_ru.pt",
+        "languages": {"rus": "ru"},
+        "samplerate": 24000,
+        "files": [],
+        "voice": default_speaker,
+        "voices": {},
+        "rating": {"VRAM": 0, "CPU": 5, "RAM": 2, "Realism": 4}
     }
 }

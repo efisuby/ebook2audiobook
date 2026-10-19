@@ -124,6 +124,70 @@ python -c "import ast; [ast.parse(open(p).read()) for p in ('lib/conf_models.py'
 A live run needs `pip install --no-deps qwen-tts accelerate librosa einops sox`
 and the `Qwen/Qwen3-TTS-12Hz-1.7B-Base` weights (~4.5 GB).
 
+## Fork change: the Silero TTS engine
+
+Adds a `silero` engine (`lib/classes/tts_engines/silero.py`,
+`class Silero(TTSUtils, TTSRegistry, name='silero')`) for **Russian only**. Silero
+cannot clone a voice: the per-character reference file cast by E2A only picks one of
+the model's five built-in speakers. It runs on CPU (a sentence costs ~50–100 ms), so
+the GPU is left to the other engines. Output is 24 kHz mono.
+
+### Files touched
+
+| File | Change |
+|------|--------|
+| `lib/conf_models.py` | `TTS_ENGINES["SILERO"] = "silero"` and a `default_engine_settings` entry: one language (`{"rus": "ru"}`), `samplerate: 24000`, `files: []`, `voices: {}`, `rating {"VRAM": 0, "CPU": 5, "RAM": 2, "Realism": 4}`. |
+| `lib/classes/tts_engines/presets/silero_presets.py` | `models = {"internal": {...}}` only — `repo` is the `v5_6_ru.pt` URL on `models.silero.ai`. |
+| `lib/classes/tts_engines/silero.py` | New engine. `load_engine()` downloads the `.pt` with `torch.hub.download_url_to_file` and unpacks it with `torch.package.PackageImporter(...).load_pickle('tts_models', 'model')`; `_speaker_for()` maps a voice file to a built-in speaker; `convert()` copies `qwen3tts.convert()`. |
+| `lib/classes/tts_engines/__init__.py` | `from .silero import Silero` (this is what registers the engine). |
+| `README.md`, `readme/README_rus.md` | `Silero` in the engines list + a usage note (licence, download, CPU). |
+
+`requirements.txt` is untouched: the checkpoint is a torch-package file loaded straight
+from disk, so nothing but `torch` is needed. The `silero` PyPI package is deliberately
+not used — it only wraps the same download.
+
+### Design notes for future edits
+
+- **Only Russian.** The settings carry a single `{"rus": "ru"}` and the preset points at
+  `…/tts/ru/v5_6_ru.pt`. Silero's other families (CIS/Turkic, the older `v4_ru`, the jit
+  models) live at other URLs and some need the `torch.jit` path instead of
+  `torch.package` — that is where to extend.
+- **`v5_6_ru` is the best Russian model** (auto-stress, homographs, questions, emphasis).
+  It has exactly five speakers — `aidar`, `baya`, `kseniya`, `eugene`, `xenia` — and does
+  **not** accept `speaker='random'` (v3/v4 did).
+- **Voice mapping** (`_speaker_for`): a voice file whose stem is a speaker name is used
+  as-is; otherwise the gender is read from the directory (`…/adult/male/…` vs
+  `…/adult/female/…`, female checked first, deterministic md5 fallback when neither is
+  there) and the speaker is handed out round-robin from `speaker_pools` (male
+  `aidar`/`eugene`, female `baya`/`kseniya`/`xenia`), cached in `params['voice_speakers']`
+  so a narrator keeps one speaker for the whole book.
+- Spacing and `[emotion:…]` behaviour are copied from `qwen3tts`: `convert()` uses the
+  same `trim_audio()` / `_silence_follows()` / `last_audible` rules (so no pause comes
+  from a `[voice:…]` switch), and `fine_tuned_params = {}` means the emotion tag reaches
+  this engine only as `params['emotion_gain']`.
+- `samplerate: 24000`, not the model's 48 kHz: at 48 kHz the output peaks above 1.0
+  (measured 1.043) while the final ffmpeg pass writes `-sample_fmt s16`, so it would
+  clip. All three rates produce the same duration (it re-renders, not upsamples).
+- The `.pt` source contains `'\^'`, so python emits
+  `SyntaxWarning: invalid escape sequence` while compiling it; `load_engine()` swallows
+  exactly that category.
+- Not in `tts_engines_with_inner_speaker`, `tts_engines_from_coqui` or
+  `tts_engines_with_custom_model`: the GUI keeps the XTTS-like voice flow (voices from
+  files), because the speaker choice happens inside the engine.
+- `apply_tts()` exposes no `speed` and no `ssml` switch (SSML goes through `ssml_text=`),
+  but it does take `voice_path=`, which is the extension point if real cloning is wanted.
+- **Licence:** the weights are CC BY-NC-SA 4.0 (non-commercial); the package code is MIT.
+
+### How to check
+
+```bash
+python -c "import ast; [ast.parse(open(p).read()) for p in ('lib/conf_models.py', 'lib/classes/tts_engines/silero.py', 'lib/classes/tts_engines/presets/silero_presets.py', 'lib/classes/tts_engines/__init__.py')]"
+```
+
+A live run downloads ~148 MB from `models.silero.ai` into `models/tts/silero/`; both the
+engine smoke test and a headless `--tts_engine silero --device cpu` run pass on torch
+2.14.1+cu130.
+
 ## Fork change: transformers pinned to 4.57.3
 
 `qwen-tts` does not run on transformers 5.x: 5.x turned `@check_model_inputs()` into

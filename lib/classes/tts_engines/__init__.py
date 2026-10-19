@@ -8,3 +8,4 @@ from .tacotron import Tacotron2
 from .piper import Piper
 from .yourtts import YourTTS
 from .qwen3tts import Qwen3TTS
+from .silero import Silero
