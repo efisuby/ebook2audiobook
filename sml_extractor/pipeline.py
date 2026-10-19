@@ -39,6 +39,11 @@ TEXT_SUFFIXES = {".txt", ".md", ".text"}
 #: sample of the voice, so the narrator sample asks for a longer one.
 MIN_SAMPLE_CHARS = 40
 
+#: A voice is judged on a passage, not on one line: the wizard asks for a few
+#: dozen words and stops at a sentence boundary near the upper bound.
+DEFAULT_SAMPLE_WORDS = 40
+MAX_SAMPLE_WORDS = 90
+
 
 def _progress_shim(progress):
     """Adapt ``progress(fraction, desc=…)`` to BookNLP's ``(message, pct)``."""
@@ -310,6 +315,75 @@ def _sample_line(booknlp_data, name, min_chars):
         if text.strip():
             return text.strip()
     return ''
+
+
+def sample_text(
+    booknlp_data,
+    name,
+    words=DEFAULT_SAMPLE_WORDS,
+    max_words=MAX_SAMPLE_WORDS,
+) -> str:
+    """A passage of ``name`` long enough to judge a voice.
+
+    A few dozen words say much more about a voice than a single line.  The
+    longest run of *consecutive* segments of that speaker is preferred; when the
+    book only gives short one-line quotes, that character's quotes are strung
+    together instead.  The result is cut at a segment boundary near
+    ``max_words``.  Falls back to :func:`sample_line` when the speaker has
+    nothing of its own (the narrator reads the narration).
+    """
+    if not name:
+        return ''
+    try:
+        segments = sml_generator.book_segments(booknlp_data or {})
+    except ValueError:
+        return ''
+
+    def mine(speaker) -> bool:
+        return not speaker if name == NARRATOR else speaker == name
+
+    runs: list[list[str]] = []
+    current: list[str] = []
+    for speaker, text in segments:
+        text = (text or '').strip()
+        if not text:
+            continue
+        if mine(speaker):
+            current.append(text)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+
+    limit = max(1, int(max_words))
+    best = max(runs, key=_word_count, default=[])
+    if _word_count(best) >= max(1, int(words)):
+        return _join_words(best, limit)
+    own = [text for speaker, text in segments if mine(speaker) and (text or '').strip()]
+    if own:
+        return _join_words(own, limit)
+    return sample_line(booknlp_data, name)
+
+
+def _word_count(chunks) -> int:
+    return sum(len(str(chunk).split()) for chunk in (chunks or []))
+
+
+def _join_words(chunks, limit) -> str:
+    """Join whole chunks while the running word count stays under ``limit``."""
+    parts: list[str] = []
+    total = 0
+    for chunk in chunks:
+        chunk = str(chunk).strip()
+        if not chunk:
+            continue
+        count = len(chunk.split())
+        if parts and total + count > limit:
+            break
+        parts.append(chunk)
+        total += count
+    return ' '.join(parts).strip()
 
 
 def preview_lines(

@@ -402,10 +402,11 @@ session-driven logic (no Gradio), `lib/gradio.py` only calls one function per bu
 
 | File | Change |
 | --- | --- |
-| `lib/sml_wizard.py` | New: `analyze`, `rows`, `names`, `voice_choices`, `set_voice`, `voice_of`, `sample`, `preview`, `build`, `apply`, `cancel`, `save`, `restore`, plus the parsed-book cache and the source digest. |
-| `lib/gradio.py` | The `gr_sml_*` component group (after `gr_convert_btn`) and the `_click_gr_sml_*` handlers + event wiring (before `########### Main chains`). |
-| `lib/core.py` | `sml_output_dir`, `sml_book_id`, `sml_characters`, `sml_text`, `sml_applied` added to `set_session` (so they survive a reload) and **removed** from `reset_ebook_session`. |
-| `tests/test_sml_wizard.py` | New: 35 tests over a fake session, patched pipeline steps and a temporary voice library. |
+| `lib/sml_wizard.py` | New: `analyze`, `rows`, `names`, `voice_choices`, `set_voice`, `voice_of`, `sample`, `preview`, `build`, `apply`, `cancel`, `save`, `restore`, `state`, plus the cast editing (`remove_character`/`removed`, `set_gender`/`set_age`, `set_selected`), the Silero built-in voices (`silero_choices`, `builtin_speaker`, `_write_silence`), the parsed-book cache and the source digest. |
+| `lib/gradio.py` | The `gr_sml_*` component group (after `gr_convert_btn`) and the `_click_gr_sml_*` handlers + event wiring (before `########### Main chains`), plus the `_restore_sml_wizard` step in the session-restore chain. |
+| `lib/core.py` | `sml_output_dir`, `sml_book_id`, `sml_characters`, `sml_removed`, `sml_selected`, `sml_text`, `sml_applied` added to `set_session` (so they survive a reload) and **removed** from `reset_ebook_session`. |
+| `sml_extractor/pipeline.py` | `sample_text` (`DEFAULT_SAMPLE_WORDS = 40`, `MAX_SAMPLE_WORDS = 90`) — a multi-sentence listen fragment. |
+| `tests/test_sml_wizard.py` | New: 57 tests over a fake session, patched pipeline steps and a temporary voice library. |
 
 ### Design notes for future edits
 
@@ -442,18 +443,48 @@ session-driven logic (no Gradio), `lib/gradio.py` only calls one function per bu
 - Voice choices come from the `sml_extractor` scanner (`scan_voice_library`, accepts
   `.mp3`), not from E2A's own `voices/<lang>` dropdown, which only lists `.wav` and is
   nearly empty for `rus`. The dropdown values are absolute paths.
+- **Deleting a character** (`remove_character`) drops the record from
+  `sml_characters` and remembers the name in `sml_removed`. The name is *not* a mute
+  channel: `_voice_map` points it at the **narrator's** voice, so the lines it was
+  credited with are read by the narrator instead of being left to the block voice.
+- **Silero built-in voices** (`aidar`, `eugene`, `baya`, `kseniya`, `xenia`) are offered
+  as extra dropdown entries labelled `[silero] <speaker> · <gender>`. There is no engine
+  change: the wizard writes a 0.05 s silent WAV per speaker under
+  `<session_dir>/sml/voices/<lang>/adult/<gender>/<speaker>.wav`, which satisfies
+  `_convert_sml`'s existence check, gives `_set_voice` a path carrying the language (so
+  it is passed straight through) and `_voice_gender` the right gender, and whose stem
+  lets `Silero._speaker_for` pick the real built-in. `_voice_map` removes those marker
+  paths for any engine other than `silero`, so a document built for XTTS/Qwen can never
+  contain them. The marker lives only in the dropdown **label**; the value stays the path.
+- **Gender and age** are edited on the character record (`inferred_gender` /
+  `inferred_age_category`) and immediately visible in the table (`character_rows` reads
+  those two fields). `_set_field` returns early when the value is unchanged, because the
+  restore step re-renders the dropdowns and must not invalidate a document the user
+  already built; a real change drops `sml_text` (and thus forces «Собрать SML» again).
+  The two dropdowns are wired with `.input` (user-only) rather than `.change` for the
+  same reason.
+- **Session persistence**: every `sml_*` key is an ordinary session key, so the existing
+  save timer already stores it in localStorage and `restore_session_from_data` brings it
+  back. What was missing was the panel: `_restore_sml_wizard(session)` (a step in the
+  `gr_restore_session.change` chain, right before the glassmask is hidden) rebuilds the
+  table, the pickers, the description, the gender/age dropdowns and the preview from
+  `wizard.state(session)`, which also calls `wizard.restore(session)` as a disk fallback.
+  Consequence: after a reload/restart the user lands back on the same stage.
 
 ### How to check
 
-`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 183 tests
-OK (85 ported + 23 profile + 13 stress + 27 pipeline + 35 wizard).
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 210 tests
+OK (85 ported + 23 profile + 13 stress + 27 pipeline + 5 silero + 57 wizard).
 
 `env -u LD_LIBRARY_PATH python_env/bin/python -c "from lib.gradio import build_interface; build_interface({'script_mode': False, 'is_gui_process': True, 'share': False})"`
 must build the Blocks without error (it does, Gradio 6.29.1).
 
 In the running app: «Анализ книги» fills the table and the descriptions, picking a
-character shows its description and voice, «◉» synthesizes one line, «Собрать SML» shows
-the text preview, «Озвучить» starts the normal conversion, «Отмена»/«Стоп» interrupt it.
+character shows its description, voice, gender and age, «◉» synthesizes a longer fragment,
+«Собрать SML» shows the text preview, «Озвучить» starts the normal conversion,
+«Отмена»/«Стоп» interrupt it. «🗑 Удалить персонажа» removes a bogus name (the narrator
+reads its lines); the gender/age dropdowns edit the cast; with the Silero engine the voice
+list also offers the `[silero]` built-ins. Reloading the page keeps the stage.
 
 ## Fork change: Silero survives unpronounceable fragments
 
@@ -489,8 +520,8 @@ the text preview, «Озвучить» starts the normal conversion, «Отме�
 
 ### How to check
 
-`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 188 tests
-OK (85 ported + 23 profile + 13 stress + 27 pipeline + 35 wizard + 5 silero).
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 210 tests
+OK (85 ported + 23 profile + 13 stress + 27 pipeline + 5 silero + 57 wizard).
 
 Real-checkpoint run (`/tmp/opencode/silero_real_check.py`) with `v5_6_ru`:
 `'12345'`, `'...'` and `'Mr. Smith'` each return `(True, None)` with a 57680-byte silent

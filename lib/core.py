@@ -207,6 +207,8 @@ class SessionContext:
             "sml_output_dir": None,
             "sml_book_id": None,
             "sml_characters": [],
+            "sml_removed": [],
+            "sml_selected": None,
             "sml_text": None,
             "sml_applied": False,
             ####### Xtts settings

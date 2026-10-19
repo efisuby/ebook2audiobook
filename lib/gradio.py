@@ -164,10 +164,15 @@ def build_interface(args:dict)->gr.Blocks:
                             )
                             with gr.Row():
                                 gr_sml_character_pick = gr.Dropdown(label='Персонаж', elem_id='gr_sml_character_pick', choices=[], value=None, type='value', interactive=True, scale=2)
-                                gr_sml_voice_pick = gr.Dropdown(label='Голос', elem_id='gr_sml_voice_pick', choices=[], value=None, type='value', interactive=True, scale=2)
                                 gr_sml_listen_btn = gr.Button('◉', elem_id='gr_sml_listen_btn', scale=0)
+                            with gr.Row():
+                                gr_sml_gender = gr.Dropdown(label='Пол', elem_id='gr_sml_gender', choices=['male', 'female', 'unknown'], value=None, type='value', interactive=True)
+                                gr_sml_age = gr.Dropdown(label='Возраст', elem_id='gr_sml_age', choices=['child', 'teen', 'adult', 'elder', 'unknown'], value=None, type='value', interactive=True, allow_custom_value=True)
+                                gr_sml_delete_btn = gr.Button('🗑 Удалить персонажа', elem_id='gr_sml_delete_btn')
                             gr_sml_description = gr.Textbox(label='Описание персонажа', elem_id='gr_sml_description', interactive=False, lines=3)
-                            gr_sml_preview_player = gr.Audio(elem_id='gr_sml_preview_player', type='filepath', autoplay=True, interactive=False, buttons=None, waveform_options=gr.WaveformOptions(show_recording_waveform=False), container=True, visible=True)
+                            with gr.Row():
+                                gr_sml_voice_pick = gr.Dropdown(label='Голос', elem_id='gr_sml_voice_pick', choices=[], value=None, type='value', interactive=True, scale=4)
+                                gr_sml_preview_player = gr.Audio(elem_id='gr_sml_preview_player', type='filepath', autoplay=True, buttons=None, waveform_options=gr.WaveformOptions(show_recording_waveform=False), min_width=240, scale=1)
                             gr_sml_preview = gr.Textbox(label='Предпросмотр', elem_id='gr_sml_preview', interactive=False, lines=10)
                             with gr.Row():
                                 gr_sml_apply_btn = gr.Button('🎧 Озвучить', elem_id='gr_sml_apply_btn', variant='primary')
@@ -3925,21 +3930,32 @@ def build_interface(args:dict)->gr.Blocks:
                 wizard = _sml_wizard()
                 return [(label, path) for label, path in wizard.voice_choices(session)]
 
+            def _sml_voice_label(session, voice):
+                # the dropdown label, so a "[silero]" marker survives into a status line
+                target = str(voice)
+                for label, path in _sml_voice_options(session):
+                    if str(path) == target:
+                        return label
+                return os.path.basename(target)
+
             def _click_gr_sml_analyze_btn(session_id):
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
+                blank = (gr.update(),) * 6
                 try:
                     message = wizard.analyze(session, progress=progress_bar)
                 except wizard.WizardError as error:
-                    return str(error), gr.update(), gr.update(), gr.update(), gr.update()
+                    return (str(error),) + blank
                 except Exception as error:
-                    return (f'Анализ не удался: {error}', gr.update(), gr.update(), gr.update(), gr.update())
+                    return (f'Анализ не удался: {error}',) + blank
                 return (
                     message,
                     wizard.rows(session),
                     gr.update(choices=wizard.names(session), value=None),
                     gr.update(choices=_sml_voice_options(session), value=None),
-                    wizard.preview(session)
+                    wizard.preview(session),
+                    gr.update(value=None),
+                    gr.update(value=None)
                 )
 
             def _click_gr_sml_build_btn(session_id):
@@ -3956,20 +3972,68 @@ def build_interface(args:dict)->gr.Blocks:
             def _click_gr_sml_character_pick(session_id, name):
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
+                wizard.set_selected(session, name)
                 description = ''
+                gender = age = None
                 for row in wizard.rows(session):
                     if row and row[0] == name:
                         description = row[4] or ''
+                        gender, age = row[1], row[2]
                         break
-                return description, gr.update(value=wizard.voice_of(session, name))
+                return (
+                    description,
+                    gr.update(value=wizard.voice_of(session, name)),
+                    gr.update(value=gender),
+                    gr.update(value=age)
+                )
 
             def _click_gr_sml_voice_pick(session_id, name, voice):
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
                 if not name or not voice:
                     return gr.update(), gr.update()
+                built = bool(session.get('sml_text'))
                 wizard.set_voice(session, name, voice)
-                return wizard.rows(session), f'Голос для «{name}»: {os.path.basename(str(voice))}.'
+                tail = ' Соберите SML заново.' if built else ''
+                return wizard.rows(session), f'Голос для «{name}»: {_sml_voice_label(session, voice)}.{tail}'
+
+            def _click_gr_sml_gender_pick(session_id, name, gender):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                if not name or not gender:
+                    return gr.update(), gr.update()
+                built = bool(session.get('sml_text'))
+                wizard.set_gender(session, name, gender)
+                tail = ' Соберите SML заново.' if built else ''
+                return wizard.rows(session), f'Пол для «{name}»: {gender}.{tail}'
+
+            def _click_gr_sml_age_pick(session_id, name, age):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                if not name or not age:
+                    return gr.update(), gr.update()
+                built = bool(session.get('sml_text'))
+                wizard.set_age(session, name, age)
+                tail = ' Соберите SML заново.' if built else ''
+                return wizard.rows(session), f'Возраст для «{name}»: {age}.{tail}'
+
+            def _click_gr_sml_remove_btn(session_id, name):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                if not name:
+                    return (gr.update(),) * 7 + ('Сначала выберите персонажа.',)
+                if not wizard.remove_character(session, name):
+                    return (gr.update(),) * 7 + (f'«{name}» не найден в списке.',)
+                return (
+                    wizard.rows(session),
+                    gr.update(choices=wizard.names(session), value=None),
+                    gr.update(choices=_sml_voice_options(session), value=None),
+                    gr.update(value=''),
+                    gr.update(value=None),
+                    gr.update(value=None),
+                    wizard.preview(session),
+                    f'«{name}» удалён: его реплики прочитает рассказчик.'
+                )
 
             def _click_gr_sml_listen_btn(session_id, name):
                 wizard = _sml_wizard()
@@ -4029,10 +4093,28 @@ def build_interface(args:dict)->gr.Blocks:
                 wizard.cancel(session)
                 return 'Отмена: озвучка не запускалась, вернитесь к выбору голосов.', gr.update(value=None)
 
+            def _restore_sml_wizard(session_id):
+                # the wizard panel is not part of outputs_restore_interface (that
+                # list is index-based): the session already holds everything, this
+                # only renders it again after a reload or a restart
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                state = wizard.state(session)
+                return (
+                    state['status'],
+                    state['rows'],
+                    gr.update(choices=state['names'], value=state['selected']),
+                    gr.update(choices=state['voices'], value=wizard.voice_of(session, state['selected'])),
+                    state['description'],
+                    gr.update(value=state['gender']),
+                    gr.update(value=state['age']),
+                    state['preview']
+                )
+
             gr_sml_analyze_btn.click(
                 fn=_click_gr_sml_analyze_btn,
                 inputs=[gr_session],
-                outputs=[gr_sml_status, gr_sml_characters, gr_sml_character_pick, gr_sml_voice_pick, gr_sml_preview],
+                outputs=[gr_sml_status, gr_sml_characters, gr_sml_character_pick, gr_sml_voice_pick, gr_sml_preview, gr_sml_gender, gr_sml_age],
                 show_progress_on=[gr_sml_status]
             )
             gr_sml_build_btn.click(
@@ -4044,12 +4126,27 @@ def build_interface(args:dict)->gr.Blocks:
             gr_sml_character_pick.change(
                 fn=_click_gr_sml_character_pick,
                 inputs=[gr_session, gr_sml_character_pick],
-                outputs=[gr_sml_description, gr_sml_voice_pick]
+                outputs=[gr_sml_description, gr_sml_voice_pick, gr_sml_gender, gr_sml_age]
             )
             gr_sml_voice_pick.change(
                 fn=_click_gr_sml_voice_pick,
                 inputs=[gr_session, gr_sml_character_pick, gr_sml_voice_pick],
                 outputs=[gr_sml_characters, gr_sml_status]
+            )
+            gr_sml_gender.input(
+                fn=_click_gr_sml_gender_pick,
+                inputs=[gr_session, gr_sml_character_pick, gr_sml_gender],
+                outputs=[gr_sml_characters, gr_sml_status]
+            )
+            gr_sml_age.input(
+                fn=_click_gr_sml_age_pick,
+                inputs=[gr_session, gr_sml_character_pick, gr_sml_age],
+                outputs=[gr_sml_characters, gr_sml_status]
+            )
+            gr_sml_delete_btn.click(
+                fn=_click_gr_sml_remove_btn,
+                inputs=[gr_session, gr_sml_character_pick],
+                outputs=[gr_sml_characters, gr_sml_character_pick, gr_sml_voice_pick, gr_sml_description, gr_sml_gender, gr_sml_age, gr_sml_preview, gr_sml_status]
             )
             gr_sml_listen_btn.click(
                 fn=_click_gr_sml_listen_btn,
@@ -4276,6 +4373,10 @@ def build_interface(args:dict)->gr.Blocks:
                 inputs=[gr_session, gr_audiobook_list],
                 outputs=[gr_group_audiobook_list, gr_audiobook_player, gr_timer],
                 show_progress_on=[gr_progress]
+            ).then(
+                fn=_restore_sml_wizard,
+                inputs=[gr_session],
+                outputs=[gr_sml_status, gr_sml_characters, gr_sml_character_pick, gr_sml_voice_pick, gr_sml_description, gr_sml_gender, gr_sml_age, gr_sml_preview]
             ).then(
                 fn=lambda session: _update_gr_glassmask(attr=['gr-glass-mask', 'hide']) if session else gr.update(),
                 inputs=[gr_session],

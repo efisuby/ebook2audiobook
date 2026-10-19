@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from sml_extractor import pipeline
 from lib import sml_wizard as wizard
 
 BOOK_TXT = "\n".join(
@@ -40,6 +41,8 @@ def make_session(root, **overrides):
         "sml_output_dir": None,
         "sml_book_id": None,
         "sml_characters": [],
+        "sml_removed": [],
+        "sml_selected": None,
         "sml_text": None,
         "sml_applied": False,
     }
@@ -297,10 +300,39 @@ class VoiceTests(WizardTestCase):
         session = make_session(self.root)
         with mock.patch.object(wizard.pipeline, "APP_ROOT", Path(self.root)):
             choices = wizard.voice_choices(session)
+        library = [pair for pair in choices if wizard.SILERO_TAG not in pair[0]]
         paths = sorted(path for _label, path in choices)
-        self.assertEqual(len(choices), 3)
+        self.assertEqual(len(choices), 3 + 5)  # library + the five built-ins
         self.assertTrue(any(path.endswith("Petr.wav") for path in paths))
         self.assertTrue(all(os.path.isabs(path) for path in paths))
+        self.assertTrue(all(_label.startswith(wizard.SILERO_TAG) for _label, _p in wizard.silero_choices(session)))
+        self.assertEqual(len(wizard._library_choices(session)), 3)
+        self.assertEqual(len(wizard.silero_choices(session)), 5)
+
+    def test_the_built_in_speakers_are_offered_for_silero_only(self):
+        session = make_session(self.root, tts_engine="xtts")
+        with mock.patch.object(wizard.pipeline, "APP_ROOT", Path(self.root)):
+            choices = wizard.voice_choices(session)
+        self.assertFalse(any(wizard.SILERO_TAG in label for label, _path in choices))
+        self.assertEqual(wizard.silero_choices(session), [])
+
+    def test_a_builtin_voice_becomes_a_real_placeholder_file(self):
+        session = make_session(self.root)
+        choices = dict((label, path) for label, path in wizard.silero_choices(session))
+        self.assertIn(wizard.SILERO_TAG + ' aidar · male', choices)
+        path = choices[wizard.SILERO_TAG + ' aidar · male']
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual(wizard.builtin_speaker(session, path), "aidar")
+        self.assertIn("rus", Path(path).parts)
+        self.assertIn("male", Path(path).parts)
+        self.assertEqual(wizard.builtin_speaker(session, "/somewhere/else/Petr.wav"), "")
+
+    def test_a_user_voice_is_not_mistaken_for_a_builtin(self):
+        session = make_session(self.root)
+        wizard.silero_choices(session)  # create the placeholder directory
+        other = os.path.join(wizard.silero_voices_dir(session), "rus", "adult", "male", "Petr.wav")
+        self.assertEqual(wizard.builtin_speaker(session, other), "")
+        self.assertEqual(wizard.builtin_speaker(session, "/somewhere/else/aidar.wav"), "")
 
     def test_a_picked_voice_is_remembered(self):
         session = make_session(
@@ -313,6 +345,14 @@ class VoiceTests(WizardTestCase):
         self.assertTrue(wizard.set_voice(session, "Пётр", "/v/Petr.wav"))
         self.assertEqual(wizard.voice_of(session, "Пётр"), "/v/Petr.wav")
         self.assertIsNone(wizard.voice_of(session, "Мария"))
+
+    def test_setting_the_same_voice_keeps_the_document(self):
+        session = make_session(
+            self.root, sml_characters=[{"normalized_name": "Пётр", "voice": "/v/Petr.wav"}],
+            sml_text="[voice:/v/Petr.wav]Привет[/voice]",
+        )
+        self.assertTrue(wizard.set_voice(session, "Пётр", "/v/Petr.wav"))
+        self.assertEqual(session["sml_text"], "[voice:/v/Petr.wav]Привет[/voice]")
 
     def test_an_unknown_character_is_not_changed(self):
         session = make_session(self.root, sml_characters=[])
@@ -436,6 +476,172 @@ class PersistenceTests(WizardTestCase):
         target.mkdir(parents=True, exist_ok=True)
         Path(target, "characters.json").write_text("{not json", encoding="utf-8")
         self.assertFalse(wizard.restore(session))
+
+    def test_save_and_restore_keep_the_deletions_and_the_selection(self):
+        session = make_session(self.root)
+        with mock.patch.object(wizard.pipeline, "analyze_book", fake_analyze_book), \
+             mock.patch.object(wizard.pipeline, "cast_characters", fake_cast), \
+             mock.patch.object(wizard.pipeline, "describe_characters", fake_describe):
+            wizard.analyze(session)
+        wizard.remove_character(session, "Пётр")
+        wizard.set_selected(session, "Мария")
+        wizard.save(session)
+
+        fresh = make_session(self.root)
+        self.assertTrue(wizard.restore(fresh))
+        self.assertEqual(wizard.removed(fresh), ["Пётр"])
+        self.assertEqual(wizard.selected(fresh), "Мария")
+        self.assertEqual(wizard.names(fresh), ["Narrator", "Мария"])
+
+
+LONG_BOOK = "\n".join(
+    [
+        "Пётр вошёл в комнату и внимательно осмотрелся по сторонам.",
+        "[Пётр] Привет, Мария, как ваши дела сегодня, давно не виделись. [/]",
+        "Мария подняла глаза от книги.",
+        "[Пётр] Я хотел спросить вас о вчерашнем разговоре, он меня встревожил. [/]",
+        "[Мария] Здравствуйте, Пётр, всё хорошо, спасибо, что спросили. [/]",
+    ]
+)
+
+
+def long_quote(words):
+    return "[Пётр] " + " ".join(f"слово{index}" for index in range(words)) + " [/]"
+
+
+class SampleTextTests(unittest.TestCase):
+    """The longer listen fragment (>= a few dozen words when the book allows)."""
+
+    def test_several_quotes_of_one_character_are_joined(self):
+        text = pipeline.sample_text({"book_txt": LONG_BOOK}, "Пётр")
+        self.assertIn("Привет, Мария", text)
+        self.assertIn("вчерашнем", text)
+        single = pipeline.sample_line({"book_txt": LONG_BOOK}, "Пётр")
+        self.assertGreater(len(text.split()), len(single.split()))
+
+    def test_a_single_long_quote_is_returned_whole(self):
+        # a quote long enough on its own is not cut below the target
+        text = pipeline.sample_text({"book_txt": long_quote(60)}, "Пётр")
+        self.assertEqual(len(text.split()), 60)
+
+    def test_an_unknown_name_falls_back_to_the_narrator(self):
+        text = pipeline.sample_text({"book_txt": LONG_BOOK}, "Нет такого")
+        self.assertIn("осмотрелся", text)
+
+    def test_no_data_gives_an_empty_text(self):
+        self.assertEqual(pipeline.sample_text({}, "Пётр"), "")
+        self.assertEqual(pipeline.sample_text({"book_txt": LONG_BOOK}, ""), "")
+
+    def test_the_narrator_gets_narration(self):
+        text = pipeline.sample_text({"book_txt": LONG_BOOK}, pipeline.NARRATOR)
+        self.assertIn("осмотрелся", text)
+
+
+class RoundTwoTests(WizardTestCase):
+    """Editing the cast: delete a bogus name, change gender and age, Silero voices."""
+
+    def _analyzed(self):
+        session = make_session(self.root)
+        with mock.patch.object(wizard.pipeline, "analyze_book", fake_analyze_book), \
+             mock.patch.object(wizard.pipeline, "cast_characters", fake_cast), \
+             mock.patch.object(wizard.pipeline, "describe_characters", fake_describe):
+            wizard.analyze(session)
+        return session
+
+    def test_a_character_can_be_deleted_and_the_deletion_is_remembered(self):
+        session = self._analyzed()
+        self.assertTrue(wizard.remove_character(session, "Пётр"))
+        self.assertEqual(wizard.names(session), ["Narrator", "Мария"])
+        self.assertEqual(wizard.removed(session), ["Пётр"])
+
+    def test_deleting_clears_the_selection(self):
+        session = self._analyzed()
+        wizard.set_selected(session, "Пётр")
+        wizard.remove_character(session, "Пётр")
+        self.assertIsNone(wizard.selected(session))
+
+    def test_deleting_an_unknown_name_is_a_noop(self):
+        session = self._analyzed()
+        self.assertFalse(wizard.remove_character(session, "Император"))
+        self.assertFalse(wizard.remove_character(session, ""))
+        self.assertEqual(wizard.removed(session), [])
+
+    def test_the_lines_of_a_deleted_character_are_read_by_the_narrator(self):
+        session = self._analyzed()
+        for character in session["sml_characters"]:
+            if character["normalized_name"] == "Narrator":
+                character["voice"] = "/v/Narrator.wav"
+            elif character["normalized_name"] == "Пётр":
+                character["voice"] = "/v/Petr.wav"
+        wizard.remove_character(session, "Пётр")
+        text, _status = wizard.build(session, use_emotions=False, use_stress=False)
+        self.assertIn("Привет, Мария", text)
+        self.assertIn("/v/Narrator.wav", text)
+        self.assertNotIn("/v/Petr.wav", text)
+
+    def test_a_deleted_character_can_no_longer_be_given_a_voice(self):
+        session = self._analyzed()
+        wizard.remove_character(session, "Пётр")
+        self.assertFalse(wizard.set_voice(session, "Пётр", "/v/Petr.wav"))
+
+    def test_gender_and_age_can_be_edited(self):
+        session = self._analyzed()
+        self.assertTrue(wizard.set_gender(session, "Пётр", "female"))
+        self.assertTrue(wizard.set_age(session, "Пётр", "elder"))
+        row = next(row for row in wizard.rows(session) if row[0] == "Пётр")
+        self.assertEqual(row[1], "female")
+        self.assertEqual(row[2], "elder")
+
+    def test_an_unchanged_gender_keeps_the_built_document(self):
+        session = self._analyzed()
+        wizard.build(session, use_emotions=False, use_stress=False)
+        built = session["sml_text"]
+        self.assertTrue(wizard.set_gender(session, "Пётр", "male"))
+        self.assertEqual(session["sml_text"], built)
+
+    def test_changing_gender_drops_the_built_document(self):
+        session = self._analyzed()
+        wizard.build(session, use_emotions=False, use_stress=False)
+        self.assertTrue(wizard.set_gender(session, "Пётр", "female"))
+        self.assertIsNone(session["sml_text"])
+
+    def test_a_silero_speaker_voice_is_a_real_file(self):
+        session = self._analyzed()
+        choices = dict(wizard.silero_choices(session))
+        path = choices[wizard.SILERO_TAG + " aidar · male"]
+        self.assertTrue(os.path.isfile(path))
+
+    def test_marker_voices_are_dropped_for_every_other_engine(self):
+        session = self._analyzed()
+        path = dict(wizard.silero_choices(session))[wizard.SILERO_TAG + " aidar · male"]
+        wizard.set_voice(session, "Пётр", path)
+        session["tts_engine"] = "silero"
+        self.assertEqual(wizard._voice_map(session)["Пётр"], path)
+        session["tts_engine"] = "xtts"
+        self.assertNotIn("Пётр", wizard._voice_map(session))
+
+    def test_state_on_a_fresh_session_asks_for_the_analysis(self):
+        state = wizard.state(make_session(self.root))
+        self.assertIn("Анализ книги", state["status"])
+        self.assertEqual(state["rows"], [])
+        self.assertEqual(state["names"], [])
+
+    def test_state_renders_the_stored_session(self):
+        session = self._analyzed()
+        wizard.set_voice(session, "Пётр", "/v/Petr.wav")
+        wizard.set_selected(session, "Пётр")
+        wizard.build(session, use_emotions=False, use_stress=False)
+        wizard.save(session)
+
+        fresh = make_session(self.root)
+        state = wizard.state(fresh)
+        self.assertIn("персонажей 3", state["status"])
+        self.assertEqual(state["names"], ["Narrator", "Пётр", "Мария"])
+        self.assertEqual(state["selected"], "Пётр")
+        self.assertEqual(state["gender"], "male")
+        self.assertEqual(state["age"], "adult")
+        self.assertIn("Пётр", state["description"])
+        self.assertTrue(state["voices"])
 
 
 if __name__ == "__main__":

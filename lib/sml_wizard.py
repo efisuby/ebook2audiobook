@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import wave
 from collections import OrderedDict
 
 from sml_extractor import pipeline
@@ -25,6 +26,21 @@ BOOKNLP_LANGUAGES = ("eng", "rus")
 BOOK_MODE_TEXT = "text"
 # How many parsed books stay in memory (the tables are megabytes).
 _CACHE_LIMIT = 2
+
+#: The engine whose checkpoint has built-in voices of its own.
+SILERO_ENGINE = "silero"
+#: Marks a built-in speaker in the voice dropdown (the label only, never the value).
+SILERO_TAG = "[silero]"
+#: Mirrors ``Silero.speaker_pools`` — kept here so listing the voices does not
+#: have to import an engine (and torch).
+SILERO_SPEAKERS = (
+    ("male", ("aidar", "eugene")),
+    ("female", ("baya", "kseniya", "xenia")),
+)
+#: The genders and age categories a character can be edited to (see
+#: ``sml_extractor.voice_matcher``).
+GENDERS = ("male", "female", "unknown")
+AGE_CATEGORIES = ("child", "teen", "adult", "elder", "unknown")
 
 _books: "OrderedDict[tuple, dict]" = OrderedDict()
 # md5 of the file the analysis was made from, keyed by the output directory:
@@ -199,6 +215,8 @@ def analyze(session, model: str = "small", use_llm: bool = True, progress=None,
     session["sml_characters"] = _plain(found)
     session["sml_text"] = None
     session["sml_applied"] = False
+    session["sml_removed"] = []
+    session["sml_selected"] = None
     _remember({**booknlp_data, "output_dir": output_dir, "book_id": result["book_id"]})
     _digests[output_dir] = digest
     save(session)
@@ -241,6 +259,18 @@ def names(session) -> list:
 
 
 def voice_choices(session) -> list:
+    """``[(label, absolute path)]`` of every voice of the book language.
+
+    For Silero the checkpoint's own speakers come first, each tagged
+    ``[silero]`` in the label, so they are easy to spot next to the library.
+    """
+    choices = _library_choices(session)
+    if engine(session) == SILERO_ENGINE:
+        choices = silero_choices(session) + choices
+    return choices
+
+
+def _library_choices(session) -> list:
     """``[(label, absolute path)]`` of every voice of the book language."""
     library = scan_voice_library(pipeline.APP_ROOT, language(session))
     choices = []
@@ -252,12 +282,163 @@ def voice_choices(session) -> list:
     return choices
 
 
+# ── the engine's own voices (Silero) ──────────────────────────────────────────
+
+def silero_choices(session) -> list:
+    """``[(label, absolute path)]`` for every built-in Silero speaker.
+
+    The label carries ``[silero]`` so the dropdown tells them from the voice
+    library; the value is a real (silent) wav file that exists only so the
+    existing ``[voice:…]`` pipeline accepts it.  See :func:`builtin_speaker`.
+    """
+    if engine(session) != SILERO_ENGINE or not language(session):
+        return []
+    choices = []
+    for gender, speakers in SILERO_SPEAKERS:
+        for speaker in speakers:
+            path = _silero_voice_file(session, gender, speaker)
+            choices.append((f"{SILERO_TAG} {speaker} · {gender}", path))
+    return choices
+
+
+def silero_voices_dir(session) -> str:
+    """Where the placeholder wavs of the built-in speakers live."""
+    return os.path.join(wizard_dir(session), "voices")
+
+
+def builtin_speaker(session, path) -> str:
+    """The Silero speaker a wizard voice path stands for, or ``''``.
+
+    ``Silero._speaker_for`` reads the *stem* of the voice path, while the
+    engine's ``_set_voice`` only checks that the file exists and that the
+    language and the gender appear in it — the placeholder wav is never read.
+    """
+    if not path:
+        return ""
+    resolved = os.path.abspath(str(path))
+    root = os.path.abspath(silero_voices_dir(session))
+    if not resolved.startswith(root + os.sep):
+        return ""
+    stem = _stem(resolved).lower()
+    for _gender, speakers in SILERO_SPEAKERS:
+        if stem in speakers:
+            return stem
+    return ""
+
+
+def _silero_voice_file(session, gender, speaker) -> str:
+    path = os.path.join(
+        silero_voices_dir(session), language(session), "adult", gender, f"{speaker}.wav"
+    )
+    if not os.path.isfile(path):
+        _write_silence(path)
+    return os.path.abspath(path)
+
+
+def _write_silence(path, rate=16000, seconds=0.05) -> None:
+    """A valid, tiny, silent wav — a voice file the engine never decodes."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(b"\x00" * (2 * int(rate * seconds)))
+
+
+# ── editing the cast ──────────────────────────────────────────────────────────
+
+def remove_character(session, name: str) -> bool:
+    """Drop a name that is not a character of the book.
+
+    Its lines are no longer tagged, so the narrator reads them (see
+    :func:`_voice_map`).  The name is remembered so a later edit cannot bring
+    it back, and the built document is invalidated because it still refers to
+    the deleted voice.
+    """
+    if not name:
+        return False
+    found = characters(session)
+    kept = [character for character in found if character.get("normalized_name") != name]
+    if len(kept) == len(found):
+        return False
+    session["sml_characters"] = kept
+    removed = list(session.get("sml_removed") or [])
+    if name not in removed:
+        removed.append(name)
+    session["sml_removed"] = removed
+    if session.get("sml_selected") == name:
+        session["sml_selected"] = None
+    _invalidate(session)
+    return True
+
+
+def removed(session) -> list:
+    """The names the user deleted (they are read by the narrator)."""
+    return list(session.get("sml_removed") or [])
+
+
+def set_gender(session, name: str, gender) -> bool:
+    """Change a character's gender (what the voice is matched by)."""
+    return _set_field(session, name, "inferred_gender", gender)
+
+
+def set_age(session, name: str, age) -> bool:
+    """Change a character's age category (what the voice is matched by)."""
+    return _set_field(session, name, "inferred_age_category", age)
+
+
+def _set_field(session, name: str, field: str, value) -> bool:
+    if not name:
+        return False
+    found = characters(session)
+    hit = False
+    for character in found:
+        if character.get("normalized_name") == name:
+            # a programmatic re-render (the restore step) must not invalidate
+            # a document that is already built, so an unchanged value is a no-op
+            if (character.get(field) or None) == (value or None):
+                return True
+            if value:
+                character[field] = value
+            else:
+                character.pop(field, None)
+            hit = True
+    if not hit:
+        return False
+    session["sml_characters"] = found
+    _invalidate(session)
+    return True
+
+
+def _invalidate(session) -> None:
+    """The cast changed, so a document built from it is out of date."""
+    session["sml_text"] = None
+    session["sml_applied"] = False
+    save(session)
+
+
+def selected(session) -> str | None:
+    """The character the user last picked (kept across a restart)."""
+    return session.get("sml_selected") or None
+
+
+def set_selected(session, name) -> None:
+    session["sml_selected"] = name or None
+
+
 def set_voice(session, name: str, voice: str | None) -> bool:
-    """Remember the voice the user picked for one character."""
+    """Remember the voice the user picked for one character.
+
+    A changed voice makes an already built document stale, so it is dropped
+    (with the same unchanged-value guard as the gender/age fields, because a
+    re-render feeds the stored value back through the picker).
+    """
     for character in characters(session):
         if character.get("normalized_name") == name:
+            if (character.get("voice") or None) == (voice or None):
+                return True
             character["voice"] = voice or None
-            save(session)
+            _invalidate(session)
             return True
     return False
 
@@ -269,12 +450,16 @@ def voice_of(session, name: str) -> str | None:
     return None
 
 
-def sample(session, name: str) -> str:
-    """One line of that character to listen to before the book is made."""
+def sample(session, name: str, words: int = pipeline.DEFAULT_SAMPLE_WORDS) -> str:
+    """A passage of ``name`` — a few dozen words, not a single line.
+
+    The voice preview synthesizes this, so a character that speaks in short
+    lines still gets something to listen to.
+    """
     data = book_data(session)
     if data is None or not name:
         return ""
-    return pipeline.sample_line(data, name)
+    return pipeline.sample_text(data, name, words=words)
 
 
 def preview(session, per_character: int = 1, opening: int = 6, sml_lines: int = 12) -> str:
@@ -303,7 +488,7 @@ def build(session, use_emotions: bool = True, use_stress: bool = True, progress=
     text = pipeline.build_sml(
         data,
         found,
-        voices=voices(session),
+        voices=_voice_map(session),
         language=language(session),
         tts_engine=engine(session),
         use_emotions=use_emotions,
@@ -317,12 +502,38 @@ def build(session, use_emotions: bool = True, use_stress: bool = True, progress=
     return text, f"SML готов: блоков {len(blocks)}, из них с голосом {spoken}."
 
 
+def _voice_map(session) -> dict:
+    """``{name: path}`` for the document, with the two edits applied.
+
+    A deleted name is mapped to the narrator's voice, so its lines are read by
+    the narrator instead of the block voice.  The built-in speaker placeholders
+    of Silero are dropped for every other engine: a placeholder is silence, and
+    a cloning engine would happily clone it.
+    """
+    chosen = dict(voices(session))
+    narrator_voice = chosen.get(pipeline.NARRATOR)
+    for name in removed(session):
+        if narrator_voice:
+            chosen[name] = narrator_voice
+    if engine(session) != SILERO_ENGINE:
+        chosen = {
+            name: path
+            for name, path in chosen.items()
+            if not builtin_speaker(session, path)
+        }
+    return chosen
+
+
 def apply(session) -> str:
     """Hand the document over to the normal conversion path."""
     text = session.get("sml_text")
     if not text:
         raise WizardError("Сначала соберите SML.")
+    session["sml_text"] = text
     session["sml_applied"] = True
+    # keep it for the session persistence: a reload restores the textarea with
+    # the document already in it, so the user stays on the "ready to voice" step
+    session["ebook_textarea"] = text
     return text
 
 
@@ -343,6 +554,8 @@ def save(session) -> None:
         "book_id": session.get("sml_book_id"),
         "output_dir": output_dir,
         "characters": characters(session),
+        "removed": removed(session),
+        "selected": selected(session),
         "source": _digests.get(output_dir),
     }
     with open(path, "w", encoding="utf-8") as handle:
@@ -364,9 +577,64 @@ def restore(session) -> bool:
     session["sml_book_id"] = payload.get("book_id")
     session["sml_output_dir"] = payload.get("output_dir")
     session["sml_characters"] = payload.get("characters") or []
+    session["sml_removed"] = payload.get("removed") or []
+    session["sml_selected"] = payload.get("selected")
     if payload.get("source"):
         _digests[session["sml_output_dir"]] = payload["source"]
     return bool(session["sml_book_id"])
+
+
+def state(session) -> dict:
+    """Everything the interface needs to show the wizard as it was left.
+
+    Called after a reload or a restart: the session already carries the whole
+    state, this is only the render of it.  ``restore`` is the disk fallback for
+    a session that lost it (a new browser, a cleaned temp directory).
+    """
+    if not characters(session):
+        restore(session)
+    found = characters(session)
+    if not found:
+        return {
+            "status": "Книга ещё не разобрана: нажмите «Анализ книги».",
+            "rows": [],
+            "names": [],
+            "voices": [],
+            "selected": None,
+            "description": "",
+            "gender": None,
+            "age": None,
+            "preview": preview(session),
+        }
+    name = selected(session)
+    description = gender = age = None
+    for row in rows(session):
+        if row and row[0] == name:
+            description, gender, age = row[4], row[1], row[2]
+            break
+    else:
+        if name is not None:
+            # the selected character is gone (deleted, or a fresh analysis)
+            name = None
+    text = session.get("sml_text")
+    if text:
+        status = f"Восстановлено: персонажей {len(found)}, SML из {len(pipeline.sml_blocks(text))} блоков."
+    else:
+        status = (
+            f"Восстановлено: персонажей {len(found)}. "
+            "Выберите голоса и нажмите «Собрать SML»."
+        )
+    return {
+        "status": status,
+        "rows": rows(session),
+        "names": names(session),
+        "voices": voice_choices(session),
+        "selected": name,
+        "description": description or "",
+        "gender": gender,
+        "age": age,
+        "preview": preview(session),
+    }
 
 
 # ── small helpers ─────────────────────────────────────────────────────────────
