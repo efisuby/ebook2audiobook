@@ -245,7 +245,9 @@ def character_rows(booknlp_data, characters, voices=None) -> list[dict]:
     voice name to display.  The narrator comes first, then the busiest
     characters, then the order they appear in ``characters``.
     """
-    lines = Counter(
+    # Try to compute from BookNLP data; if unavailable/empty, fall back to
+    # the ``lines`` field already stored on the character records (session restore).
+    lines_from_booknlp = Counter(
         speaker for speaker, _text in sml_generator.collect_speech_segments(booknlp_data or {})
     )
     order = {
@@ -258,12 +260,16 @@ def character_rows(booknlp_data, characters, voices=None) -> list[dict]:
         if not name:
             continue
         path = (voices or {}).get(name) or character.get('voice') or ''
+        # prefer BookNLP count; if 0 (data missing), use saved lines field
+        line_count = lines_from_booknlp.get(name, 0)
+        if line_count == 0:
+            line_count = character.get('lines', 0)
         rows.append(
             {
                 'name': name,
                 'gender': character.get('inferred_gender') or 'unknown',
                 'age': character.get('inferred_age_category') or 'adult',
-                'lines': lines.get(name, 0),
+                'lines': line_count,
                 'description': character.get('description') or '',
                 'description_source': character.get('description_source') or '',
                 'voice': path,

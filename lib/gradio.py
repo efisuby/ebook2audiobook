@@ -4045,9 +4045,11 @@ def build_interface(args:dict)->gr.Blocks:
                 session = context.get_session(session_id)
                 print(f"[SML] listen btn clicked: session={session_id}, name={name}")
                 text = wizard.sample(session, name)
+                print(f"[SML] sample text: {text[:100]!r}")
                 if not text:
                     return gr.update(), 'Нет реплики для прослушивания: сначала нажмите «Анализ книги».'
                 voice = wizard.voice_of(session, name)
+                print(f"[SML] voice path: {voice!r}")
                 preview_file = os.path.join(wizard.wizard_dir(session), f'__sml_preview.{default_audio_proc_format}')
                 if os.path.isfile(preview_file):
                     try:
@@ -4062,14 +4064,19 @@ def build_interface(args:dict)->gr.Blocks:
                 tts_manager = None
                 try:
                     progress_bar(0.0, desc=f'Прослушивание: {name}')
+                    print(f"[SML] creating TTSManager...")
                     tts_manager = TTSManager(session)
+                    print(f"[SML] TTSManager created, calling convert_sentence2audio...")
                     converted, error = tts_manager.convert_sentence2audio(preview_file, text, block_voice=voice)
+                    print(f"[SML] convert_sentence2audio returned: converted={converted}, error={error!r}")
                     if not converted:
                         show_alert(session_id, {'type': 'warning', 'msg': error})
                         return gr.update(), f'Прослушивание не удалось: {error}'
+                    print(f"[SML] checking preview file: {preview_file}, exists={os.path.isfile(preview_file)}")
                     progress_bar(1.0, desc=f'Прослушивание: {name}')
                     return gr.update(value=preview_file), f'Прослушивание: {name} — {os.path.basename(str(voice or session["voice"]))}.'
                 except Exception as error:
+                    print(f"[SML] exception: {error}")
                     return gr.update(), f'Прослушивание не удалось: {error}'
                 finally:
                     session['tts_engine'], session['fine_tuned'], session['model_cache'] = engine_backup

@@ -473,6 +473,10 @@ def sample(session, name: str, words: int = pipeline.DEFAULT_SAMPLE_WORDS) -> st
     """
     data = book_data(session)
     if data is None or not name:
+        # fallback: if we have the character in session but no BookNLP data,
+        # return a placeholder for narrator or empty for others
+        if name == pipeline.NARRATOR:
+            return "Это примерный текст для проверки голоса рассказчика."
         return ""
     return pipeline.sample_text(data, name, words=words)
 
