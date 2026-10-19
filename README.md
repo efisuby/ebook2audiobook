@@ -467,11 +467,11 @@ selects one of the five built-in speakers of the checkpoint. Voices living in a 
 character keeps its own speaker for the whole book. Only Russian is supported; `[voice:...]` and the
 `[emotion:...]` gain behave as with the other engines, while the temperature/top_p/speed overrides are ignored.
 
-Pick the checkpoint in the `Fine Tuned` list: `internal` (the default) is `v5_6_ru`, the newest of the family
-with automatic stress, homographs, question and emphasis intonation; `v5_5_ru` is the same voices without the
-emphasis intonation, and `v4_ru` is the smaller previous generation (~40 MB instead of ~150 MB). The chosen
-checkpoint is downloaded on first use from `models.silero.ai` into `models/tts/silero/` — the checkpoint needs
-nothing but `torch` to load. Output is 24 kHz mono.
+Pick the checkpoint in the `Fine Tuned` list: `v5_6_ru` (also listed as `internal`, the key every session starts
+with — the same checkpoint) is the newest of the family with automatic stress, homographs, question and emphasis
+intonation; `v5_5_ru` is the same voices without the emphasis intonation, and `v4_ru` is the smaller previous
+generation (~40 MB instead of ~150 MB). The chosen checkpoint is downloaded on first use from `models.silero.ai`
+into `models/tts/silero/` — the checkpoint needs nothing but `torch` to load. Output is 24 kHz mono.
 
 Every fragment is pre-processed with `Silero Stress` (`silero-stress`, MIT, bundled with the other requirements):
 it writes the stress and solves the homographs of the Russian text (`замок` → `зам+ок`), and the checkpoints

@@ -7,7 +7,9 @@ from lib.conf_models import TTS_ENGINES, default_engine_settings
 # tts_dir/silero/ on first use. They carry an accentor and a homograph solver of
 # their own and advertise the 5 speakers the engine maps the cast voices onto;
 # v5_6_ru is the newest of the family (stress, homographs, question and emphasis
-# intonation).
+# intonation). It is exposed twice: as `internal` (the key every session defaults
+# to) and under its real name `v5_6_ru`, so the GUI model list shows the version
+# next to v5_5_ru/v4_ru instead of only the generic default.
 #
 # Per entry:
 #   lang    matched against session["language"] by the GUI model list
@@ -23,6 +25,15 @@ models = {
     # "internal" is the key default_fine_tuned points at, so the GUI/CLI
     # fine-tuned fallback resolves for this engine as well.
     "internal": {
+        "lang": "rus",
+        "repo": "https://models.silero.ai/models/tts/ru/v5_6_ru.pt",
+        "sub": "",
+        "voice": default_engine_settings[TTS_ENGINES['SILERO']]['voice'],
+        "files": [],
+        "samplerate": default_engine_settings[TTS_ENGINES['SILERO']]['samplerate'],
+        "stress": True
+    },
+    "v5_6_ru": {
         "lang": "rus",
         "repo": "https://models.silero.ai/models/tts/ru/v5_6_ru.pt",
         "sub": "",

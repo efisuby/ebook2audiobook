@@ -137,7 +137,7 @@ the GPU is left to the other engines. Output is 24 kHz mono.
 | File | Change |
 |------|--------|
 | `lib/conf_models.py` | `TTS_ENGINES["SILERO"] = "silero"` and a `default_engine_settings` entry: one language (`{"rus": "ru"}`), `samplerate: 24000`, `files: []`, `voices: {}`, `rating {"VRAM": 0, "CPU": 5, "RAM": 2, "Realism": 4}`. |
-| `lib/classes/tts_engines/presets/silero_presets.py` | `models` = `internal` (`v5_6_ru`, the default), `v5_5_ru` and `v4_ru`; `repo` is the `.pt` URL on `models.silero.ai`, each entry carries the optional `"stress"` flag. |
+| `lib/classes/tts_engines/presets/silero_presets.py` | `models` = `internal` (`v5_6_ru`, the default), `v5_6_ru` (the same checkpoint under its own name, so the GUI list shows the version), `v5_5_ru` and `v4_ru`; `repo` is the `.pt` URL on `models.silero.ai`, each entry carries the optional `"stress"` flag. |
 | `lib/classes/tts_engines/silero.py` | New engine. `load_engine()` downloads the `.pt` with `torch.hub.download_url_to_file` and unpacks it with `torch.package.PackageImporter(...).load_pickle('tts_models', 'model')`; `_speaker_for()` maps a voice file to a built-in speaker; `convert()` copies `qwen3tts.convert()`. |
 | `lib/classes/tts_engines/__init__.py` | `from .silero import Silero` (this is what registers the engine). |
 | `requirements.txt` | `silero-stress` — the text pre-processing (stress marks + homograph resolution). |
@@ -161,7 +161,9 @@ not used — it only wraps the same download.
   dropdown empty and gradio then refuses the default with
   `Value: internal is not in the list of choices: []`.
 - **`v5_6_ru` is the best Russian model** (auto-stress, homographs, questions, emphasis) and
-  is what `internal` points at; `v5_5_ru` is the same voices without the emphasis
+  is what `internal` points at; the same checkpoint is also listed as `v5_6_ru`, because the
+  GUI dropdown only shows the preset keys and `internal` does not tell the user which
+  version it is. `v5_5_ru` is the same voices without the emphasis
   intonation, and `v4_ru` is the smaller previous generation (~40 MB, the only one that also
   advertises `speaker='random'`). The v5 family has exactly five speakers — `aidar`, `baya`,
   `kseniya`, `eugene`, `xenia` — and does **not** accept `speaker='random'`.
