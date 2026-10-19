@@ -269,10 +269,15 @@ class BuildSmlTests(unittest.TestCase):
                 voices={"Пётр": "/voices/rus/adult/male/Petr.wav"},
                 tts_engine="xtts",
             )
+        lines = sml.splitlines()
+        # Each sentence is now its own block
         self.assertIn(
-            "[voice:/voices/rus/adult/male/Petr.wav]"
-            "[emotion:joy]Привет, Мария! Как ваши дела сегодня?[/emotion][/voice]",
-            sml.splitlines(),
+            "[voice:/voices/rus/adult/male/Petr.wav][emotion:joy]Привет, Мария![/emotion][/voice]",
+            lines,
+        )
+        self.assertIn(
+            "[voice:/voices/rus/adult/male/Petr.wav][emotion:joy]Как ваши дела сегодня?[/emotion][/voice]",
+            lines,
         )
         # the narrator line stays bare, so E2A reads it with the block voice
         self.assertIn("Пётр вошёл в комнату. Он был суровым человеком.", sml)

@@ -240,12 +240,18 @@ def rows(session) -> list:
             for row in pipeline.character_rows(data, found)
         ]
     # the tables are gone (forgotten session): show what the session kept
+    # count quotes from the session characters
+    quote_counts = {}
+    for character in found:
+        name = character.get("normalized_name")
+        if name:
+            quote_counts[name] = character.get("lines", 0)
     return [
         [
             character.get("normalized_name", ""),
             character.get("inferred_gender", ""),
             character.get("inferred_age_category", ""),
-            "",
+            str(quote_counts.get(character.get("normalized_name", ""), "")),
             character.get("description", ""),
             _stem(character.get("voice")),
         ]

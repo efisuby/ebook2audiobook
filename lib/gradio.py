@@ -161,6 +161,7 @@ def build_interface(args:dict)->gr.Blocks:
                                 elem_id='gr_sml_characters',
                                 interactive=False,
                                 wrap=True,
+                                col_count=(6, 'fixed'),
                             )
                             with gr.Row():
                                 gr_sml_character_pick = gr.Dropdown(label='Персонаж', elem_id='gr_sml_character_pick', choices=[], value=None, type='value', interactive=True, scale=2)
@@ -3991,11 +3992,11 @@ def build_interface(args:dict)->gr.Blocks:
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
                 if not name or not voice:
-                    return gr.update(), gr.update()
+                    return gr.update(), gr.update(), gr.update()
                 built = bool(session.get('sml_text'))
                 wizard.set_voice(session, name, voice)
                 tail = ' Соберите SML заново.' if built else ''
-                return wizard.rows(session), f'Голос для «{name}»: {_sml_voice_label(session, voice)}.{tail}'
+                return wizard.rows(session), f'Голос для «{name}»: {_sml_voice_label(session, voice)}.{tail}', gr.update(value=voice)
 
             def _click_gr_sml_gender_pick(session_id, name, gender):
                 wizard = _sml_wizard()
@@ -4131,7 +4132,7 @@ def build_interface(args:dict)->gr.Blocks:
             gr_sml_voice_pick.change(
                 fn=_click_gr_sml_voice_pick,
                 inputs=[gr_session, gr_sml_character_pick, gr_sml_voice_pick],
-                outputs=[gr_sml_characters, gr_sml_status]
+                outputs=[gr_sml_characters, gr_sml_status, gr_sml_voice_pick]
             )
             gr_sml_gender.input(
                 fn=_click_gr_sml_gender_pick,

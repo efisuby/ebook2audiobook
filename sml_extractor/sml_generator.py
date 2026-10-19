@@ -6,6 +6,12 @@ import re
 from pathlib import Path
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentences, preserving punctuation."""
+    # Split on sentence-ending punctuation followed by whitespace
+    return [item.strip() for item in re.split(r"(?<=[.!?…])\s+", text) if item.strip()]
+
+
 def resolve_voice_path(voice_path:str, library_root:str)->Path:
     """Find a voice in this tool's library for local playback."""
     library_root = Path(library_root).expanduser().resolve()
@@ -174,9 +180,9 @@ def _render_segments(
 ) -> str:
     """Turn ``(speaker, text)`` segments into the SML document.
 
-    Every voice block stays on one text line: Calibre can split a TXT book at
-    headings, and an opening tag stranded in another XHTML document would be
-    rejected by E2A, which validates each document separately.
+    Each sentence becomes its own line/block so E2A synthesizes sentence by sentence.
+    Voice changes (speaker changes) are still respected as block boundaries.
+    The emotion of a segment is applied to all its sentences.
     """
     emotion_map = emotion_map or {}
     sml_lines = []
@@ -185,21 +191,30 @@ def _render_segments(
         if speaker is None:
             # Paragraph break ("" from the token path) or a raw pass-through
             # line from the .book.txt fallback.
-            sml_lines.append(text)
+            if text:
+                sml_lines.append(text)
             continue
 
         cleaned = clean_tts_text(text)
         if not cleaned:
             continue
 
-        label = emotion_map.get(cleaned)
-        body = f"[emotion:{label}]{cleaned}[/emotion]" if label else cleaned
+        # Get the emotion for this segment (applied to all its sentences)
+        segment_emotion = emotion_map.get(cleaned)
 
-        voice_path = char_voice_map.get(speaker)
-        voice_tag_val = speaker if use_macros else voice_path
-        sml_lines.append(
-            f"[voice:{voice_tag_val}]{body}[/voice]" if voice_tag_val else body
-        )
+        # Split into sentences for sentence-level blocks
+        sentences = _split_sentences(cleaned)
+        for sent in sentences:
+            if not sent:
+                continue
+            label = segment_emotion
+            body = f"[emotion:{label}]{sent}[/emotion]" if label else sent
+
+            voice_path = char_voice_map.get(speaker)
+            voice_tag_val = speaker if use_macros else voice_path
+            sml_lines.append(
+                f"[voice:{voice_tag_val}]{body}[/voice]" if voice_tag_val else body
+            )
 
     return "\n".join(sml_lines)
 
