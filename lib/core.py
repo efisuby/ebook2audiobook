@@ -203,6 +203,12 @@ class SessionContext:
             "abs_url": default_abs_url,
             "abs_api_token": default_abs_api_token,
             "abs_library": default_abs_library,
+            ####### Sml wizard settings
+            "sml_output_dir": None,
+            "sml_book_id": None,
+            "sml_characters": [],
+            "sml_text": None,
+            "sml_applied": False,
             ####### Xtts settings
             "xtts_temperature": default_engine_settings[TTS_ENGINES['XTTS']]['temperature'],
             #"xtts_codec_temperature": default_engine_settings[TTS_ENGINES['XTTS']]['codec_temperature'],
@@ -4644,6 +4650,9 @@ def reset_ebook_session(session_id:str, force:bool, filter_keys:bool)->None:
         "ebook": None,
         "ebook_textarea_src": None,
         "process_dir": None,
+        # the sml wizard keys are intentionally not reset here: every conversion
+        # (including "озвучить") calls this function, and the wizard has to keep
+        # the chosen voices so that "отмена" can go back to them
         "chapters_dir": None,
         "sentences_dir": None,
         "epub_path": None,

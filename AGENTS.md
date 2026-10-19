@@ -390,3 +390,67 @@ OK (85 ported + 23 profile + 13 stress + 27 pipeline).
 `/tmp/opencode/pipeline_smoke.py` walks the whole path without BookNLP or the model: a
 four-line book with two quotes, then cast, rows, sample lines, preview, stress preview
 (`+` for `silero`, clean for `xtts`) and the SML blocks.
+
+## Fork change: the book-to-SML wizard (`lib/sml_wizard.py` + the GUI)
+
+The interface drives the whole path in one place: **«Анализ книги» → cast/describe →
+«Собрать SML» → listen to one line per character → «Озвучить»**, with a preview and a
+cancel button before the book is really synthesized. `lib/sml_wizard.py` holds the
+session-driven logic (no Gradio), `lib/gradio.py` only calls one function per button.
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `lib/sml_wizard.py` | New: `analyze`, `rows`, `names`, `voice_choices`, `set_voice`, `voice_of`, `sample`, `preview`, `build`, `apply`, `cancel`, `save`, `restore`, plus the parsed-book cache and the source digest. |
+| `lib/gradio.py` | The `gr_sml_*` component group (after `gr_convert_btn`) and the `_click_gr_sml_*` handlers + event wiring (before `########### Main chains`). |
+| `lib/core.py` | `sml_output_dir`, `sml_book_id`, `sml_characters`, `sml_text`, `sml_applied` added to `set_session` (so they survive a reload) and **removed** from `reset_ebook_session`. |
+| `tests/test_sml_wizard.py` | New: 35 tests over a fake session, patched pipeline steps and a temporary voice library. |
+
+### Design notes for future edits
+
+- `_start_conversion` calls `reset_ebook_session(session_id, force=True,
+  filter_keys=False)` at the start of **every** conversion. That is why the `sml_*` keys
+  live only in `set_session` and not in `reset_ebook_session` — otherwise «Отмена» could
+  not return to the voice choice, and the SML document would be wiped by the very
+  conversion that uses it.
+- `lib/sml_wizard` is imported lazily (`_sml_wizard()` inside each handler) so a broken
+  ML setup cannot stop the app from starting. Its labels are literal Russian strings and
+  are deliberately **not** added to the `legends` translation tables.
+- The wizard components are deliberately not part of `outputs_refresh_interface`,
+  `outputs_disable_components` or `outputs_enable_components`: those lists are
+  index-based and fragile. Consequence: the panel stays interactive while a conversion
+  runs, and `_refresh_interface` does not touch it.
+- «Озвучить» does not start a conversion of its own: it writes the SML into
+  `gr_ebook_textarea`, switches `gr_ebook_mode` to `TEXT`, and the normal chain
+  (`_chain_check_override` → `_check_override_ebook` → `gr_event.change` →
+  `_start_conversion`) takes over. `_check_override_ebook` stores
+  `session['ebook_textarea']` and bumps `gr_event`, so the wizard reuses the whole TEXT
+  path unchanged.
+- «Отмена» handles both states: while converting it sets `cancellation_requested` (the
+  same flag the per-sentence loop polls), otherwise it clears `sml_applied` and returns
+  to the picker. «Стоп» is the explicit interrupt for a running synthesis.
+- `analyze()` skips the BookNLP run when the md5 of the source file is unchanged
+  (digest kept in a module dict **and** in `characters.json`), so pressing «Анализ книги»
+  twice — or re-entering the panel — is cheap.
+- `book_data()` returns the same shape on a cache hit and after a reload: the tables
+  themselves plus `output_dir`/`book_id` (never the `load_book()` wrapper). `rows()`
+  falls back to the session records when the tables are gone.
+- The listen preview is written to `<session_dir>/sml/__sml_preview.<fmt>` (not
+  `process_dir`, which may not exist before the first conversion), with the engine,
+  `fine_tuned` and `model_cache` backed up and restored around it.
+- Voice choices come from the `sml_extractor` scanner (`scan_voice_library`, accepts
+  `.mp3`), not from E2A's own `voices/<lang>` dropdown, which only lists `.wav` and is
+  nearly empty for `rus`. The dropdown values are absolute paths.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 183 tests
+OK (85 ported + 23 profile + 13 stress + 27 pipeline + 35 wizard).
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -c "from lib.gradio import build_interface; build_interface({'script_mode': False, 'is_gui_process': True, 'share': False})"`
+must build the Blocks without error (it does, Gradio 6.29.1).
+
+In the running app: «Анализ книги» fills the table and the descriptions, picking a
+character shows its description and voice, «◉» synthesizes one line, «Собрать SML» shows
+the text preview, «Озвучить» starts the normal conversion, «Отмена»/«Стоп» interrupt it.

@@ -141,6 +141,39 @@ def build_interface(args:dict)->gr.Blocks:
                         with gr.Group(elem_id='gr_group_convert_btn', elem_classes=['gr-group-convert-btn']) as gr_group_convert_btn:
                             gr_convert_btn = gr.Button(elem_id='gr_convert_btn', value='📚', elem_classes='gr-convert-btn', variant='primary', interactive=False)
 
+                        # ── the book-to-SML wizard ───────────────────────────────
+                        # one path: analyse the book, describe and cast the characters,
+                        # listen to a single line of each, then synthesize the whole book
+                        with gr.Group(elem_id='gr_group_sml_wizard') as gr_group_sml_wizard:
+                            gr_sml_markdown = gr.Markdown(
+                                '### 🎭 Озвучка с ролями (SML)\n'
+                                'Загрузите книгу или вставьте текст выше, затем: «Анализ книги» → '
+                                'описания и голоса персонажей → «Собрать SML» → прослушайте по одной '
+                                'реплике на персонажа → «Озвучить».'
+                            )
+                            gr_sml_status = gr.Textbox(label='Состояние', elem_id='gr_sml_status', interactive=False, lines=2)
+                            with gr.Row():
+                                gr_sml_analyze_btn = gr.Button('🔎 Анализ книги', elem_id='gr_sml_analyze_btn', variant='primary')
+                                gr_sml_build_btn = gr.Button('🏷 Собрать SML', elem_id='gr_sml_build_btn')
+                            gr_sml_characters = gr.Dataframe(
+                                headers=['Персонаж', 'Пол', 'Возраст', 'Реплик', 'Описание', 'Голос'],
+                                datatype='str',
+                                elem_id='gr_sml_characters',
+                                interactive=False,
+                                wrap=True,
+                            )
+                            with gr.Row():
+                                gr_sml_character_pick = gr.Dropdown(label='Персонаж', elem_id='gr_sml_character_pick', choices=[], value=None, type='value', interactive=True, scale=2)
+                                gr_sml_voice_pick = gr.Dropdown(label='Голос', elem_id='gr_sml_voice_pick', choices=[], value=None, type='value', interactive=True, scale=2)
+                                gr_sml_listen_btn = gr.Button('◉', elem_id='gr_sml_listen_btn', scale=0)
+                            gr_sml_description = gr.Textbox(label='Описание персонажа', elem_id='gr_sml_description', interactive=False, lines=3)
+                            gr_sml_preview_player = gr.Audio(elem_id='gr_sml_preview_player', type='filepath', autoplay=True, interactive=False, buttons=None, waveform_options=gr.WaveformOptions(show_recording_waveform=False), container=True, visible=True)
+                            gr_sml_preview = gr.Textbox(label='Предпросмотр', elem_id='gr_sml_preview', interactive=False, lines=10)
+                            with gr.Row():
+                                gr_sml_apply_btn = gr.Button('🎧 Озвучить', elem_id='gr_sml_apply_btn', variant='primary')
+                                gr_sml_stop_btn = gr.Button('⏹ Стоп', elem_id='gr_sml_stop_btn')
+                                gr_sml_cancel_btn = gr.Button('✖ Отмена', elem_id='gr_sml_cancel_btn')
+
                     with gr.Tab(legends['gr_tab_xtts_params'], elem_id='gr_tab_xtts_params', elem_classes='gr-tab', visible=False) as gr_tab_xtts_params:
                         with gr.Group(elem_id='gr_group_xtts_params', elem_classes=['gr-group']):
                             gr_xtts_temperature = gr.Slider(
@@ -3879,6 +3912,173 @@ def build_interface(args:dict)->gr.Blocks:
                 fn=_update_gr_save_session,
                 inputs=[gr_session, gr_session_update],
                 outputs=[gr_save_session, gr_session_update, gr_audiobook_list]
+            )
+
+            ########### SML wizard
+
+            def _sml_wizard():
+                # imported lazily: a broken ml setup must not stop the app from starting
+                from lib import sml_wizard
+                return sml_wizard
+
+            def _sml_voice_options(session):
+                wizard = _sml_wizard()
+                return [(label, path) for label, path in wizard.voice_choices(session)]
+
+            def _click_gr_sml_analyze_btn(session_id):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                try:
+                    message = wizard.analyze(session, progress=progress_bar)
+                except wizard.WizardError as error:
+                    return str(error), gr.update(), gr.update(), gr.update(), gr.update()
+                except Exception as error:
+                    return (f'Анализ не удался: {error}', gr.update(), gr.update(), gr.update(), gr.update())
+                return (
+                    message,
+                    wizard.rows(session),
+                    gr.update(choices=wizard.names(session), value=None),
+                    gr.update(choices=_sml_voice_options(session), value=None),
+                    wizard.preview(session)
+                )
+
+            def _click_gr_sml_build_btn(session_id):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                try:
+                    _text, message = wizard.build(session, progress=progress_bar)
+                except wizard.WizardError as error:
+                    return str(error), gr.update(), gr.update()
+                except Exception as error:
+                    return f'Сборка SML не удалась: {error}', gr.update(), gr.update()
+                return message, wizard.rows(session), wizard.preview(session)
+
+            def _click_gr_sml_character_pick(session_id, name):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                description = ''
+                for row in wizard.rows(session):
+                    if row and row[0] == name:
+                        description = row[4] or ''
+                        break
+                return description, gr.update(value=wizard.voice_of(session, name))
+
+            def _click_gr_sml_voice_pick(session_id, name, voice):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                if not name or not voice:
+                    return gr.update(), gr.update()
+                wizard.set_voice(session, name, voice)
+                return wizard.rows(session), f'Голос для «{name}»: {os.path.basename(str(voice))}.'
+
+            def _click_gr_sml_listen_btn(session_id, name):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                text = wizard.sample(session, name)
+                if not text:
+                    return gr.update(), 'Нет реплики для прослушивания: сначала нажмите «Анализ книги».'
+                voice = wizard.voice_of(session, name)
+                preview_file = os.path.join(wizard.wizard_dir(session), f'__sml_preview.{default_audio_proc_format}')
+                if os.path.isfile(preview_file):
+                    try:
+                        os.remove(preview_file)
+                    except OSError:
+                        pass
+                engine_backup = (session['tts_engine'], session['fine_tuned'], session['model_cache'])
+                status_backup = session.get('status')
+                session['status'] = status_tags['CONVERTING']
+                session['cancellation_requested'] = False
+                converted = False
+                tts_manager = None
+                try:
+                    progress_bar(0.0, desc=f'Прослушивание: {name}')
+                    tts_manager = TTSManager(session)
+                    converted, error = tts_manager.convert_sentence2audio(preview_file, text, block_voice=voice)
+                    if not converted:
+                        show_alert(session_id, {'type': 'warning', 'msg': error})
+                        return gr.update(), f'Прослушивание не удалось: {error}'
+                    progress_bar(1.0, desc=f'Прослушивание: {name}')
+                    return gr.update(value=preview_file), f'Прослушивание: {name} — {os.path.basename(str(voice or session["voice"]))}.'
+                except Exception as error:
+                    return gr.update(), f'Прослушивание не удалось: {error}'
+                finally:
+                    session['tts_engine'], session['fine_tuned'], session['model_cache'] = engine_backup
+                    session['status'] = status_backup if status_backup is not None else status_tags['READY']
+                    if not converted and tts_manager is not None:
+                        unload_tts_manager(tts_manager)
+
+            def _click_gr_sml_apply_btn(session_id):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                if not session.get('sml_text'):
+                    return gr.update(), gr.update(), 'Сначала нажмите «Собрать SML».'
+                text = wizard.apply(session)
+                return gr.update(value=text), gr.update(value=ebook_modes['TEXT']), 'SML-текст передан в озвучку.'
+
+            def _click_gr_sml_stop_btn(session_id):
+                session = context.get_session(session_id)
+                session['cancellation_requested'] = True
+                return 'Остановка запрошена: озвучка прервётся после текущего предложения.'
+
+            def _click_gr_sml_cancel_btn(session_id):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                if session.get('status') == status_tags['CONVERTING']:
+                    session['cancellation_requested'] = True
+                    return 'Отмена: озвучка прервётся после текущего предложения.', gr.update()
+                wizard.cancel(session)
+                return 'Отмена: озвучка не запускалась, вернитесь к выбору голосов.', gr.update(value=None)
+
+            gr_sml_analyze_btn.click(
+                fn=_click_gr_sml_analyze_btn,
+                inputs=[gr_session],
+                outputs=[gr_sml_status, gr_sml_characters, gr_sml_character_pick, gr_sml_voice_pick, gr_sml_preview],
+                show_progress_on=[gr_sml_status]
+            )
+            gr_sml_build_btn.click(
+                fn=_click_gr_sml_build_btn,
+                inputs=[gr_session],
+                outputs=[gr_sml_status, gr_sml_characters, gr_sml_preview],
+                show_progress_on=[gr_sml_status]
+            )
+            gr_sml_character_pick.change(
+                fn=_click_gr_sml_character_pick,
+                inputs=[gr_session, gr_sml_character_pick],
+                outputs=[gr_sml_description, gr_sml_voice_pick]
+            )
+            gr_sml_voice_pick.change(
+                fn=_click_gr_sml_voice_pick,
+                inputs=[gr_session, gr_sml_character_pick, gr_sml_voice_pick],
+                outputs=[gr_sml_characters, gr_sml_status]
+            )
+            gr_sml_listen_btn.click(
+                fn=_click_gr_sml_listen_btn,
+                inputs=[gr_session, gr_sml_character_pick],
+                outputs=[gr_sml_preview_player, gr_sml_status],
+                show_progress_on=[gr_sml_status]
+            )
+            _chain_enable(
+                _chain_check_override(
+                    gr_sml_apply_btn.click(
+                        fn=_click_gr_sml_apply_btn,
+                        inputs=[gr_session],
+                        outputs=[gr_ebook_textarea, gr_ebook_mode, gr_sml_status]
+                    )
+                ),
+                always=False
+            ).then(
+                js=f'()=>{{{js_hide_elements}}}'
+            )
+            gr_sml_stop_btn.click(
+                fn=_click_gr_sml_stop_btn,
+                inputs=[gr_session],
+                outputs=[gr_sml_status],
+                queue=False
+            )
+            gr_sml_cancel_btn.click(
+                fn=_click_gr_sml_cancel_btn,
+                inputs=[gr_session],
+                outputs=[gr_sml_status, gr_sml_preview_player]
             )
 
             ########### Main chains
