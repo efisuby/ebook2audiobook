@@ -117,19 +117,27 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
         speakers = self.params['voice_speakers']
         if voice in speakers:
             return speakers[voice]
+        available = self._available_speakers()
         builtin = tuple(speaker for pool in self.speaker_pools.values() for speaker in pool)
         stem = Path(voice).stem.lower() if voice else ''
-        if stem in builtin:
+        if stem in builtin and (not available or stem in available):
             # a cast voice named after a builtin speaker selects that speaker
             speakers[voice] = stem
             return stem
         gender = self._voice_gender(voice)
-        pool = self.speaker_pools[gender]
+        pool = tuple(speaker for speaker in self.speaker_pools[gender] if not available or speaker in available)
+        if not pool:
+            pool = available or self.speaker_pools[gender]
         cursor = self.params['speaker_cursor']
         speaker = pool[cursor[gender] % len(pool)]
         cursor[gender] += 1
         speakers[voice] = speaker
         return speaker
+
+    def _available_speakers(self)->tuple:
+        # not every checkpoint of the family carries all five voices (v5_4_ru
+        # ships four), so the pools are intersected with the real speaker list
+        return tuple(getattr(self.engine, 'speakers', None) or ())
 
     @staticmethod
     def _voice_gender(voice:str)->str:

@@ -462,15 +462,17 @@ pip install accelerate librosa einops sox
 
 ### Silero TTS
 `Silero TTS` is a small, fast CPU engine that needs no reference voice: the file cast to a character only
-selects one of the five built-in speakers of `v5_6_ru`. Voices living in a `…/adult/male/` folder map to
+selects one of the five built-in speakers of the checkpoint. Voices living in a `…/adult/male/` folder map to
 `aidar`/`eugene` and voices in `…/adult/female/` to `baya`/`kseniya`/`xenia`, handed out round-robin so every
 character keeps its own speaker for the whole book. Only Russian is supported; `[voice:...]` and the
 `[emotion:...]` gain behave as with the other engines, while the temperature/top_p/speed overrides are ignored.
 
-The ~150 MB checkpoint is downloaded on first use from `models.silero.ai` into `models/tts/silero/v5_6_ru.pt` —
-no extra python package is installed, `torch` alone loads it. Output is 24 kHz mono. The weights are published
-under the **non-commercial CC BY-NC-SA 4.0** licence (the code is MIT), so check the terms before any commercial
-use.
+Pick the checkpoint in the `Fine Tuned` list: `internal` (the default) is `v5_6_ru`, the newest of the family
+with automatic stress, homographs, question and emphasis intonation; `v5_5_ru` is the same voices without the
+emphasis intonation, and `v4_ru` is the smaller previous generation (~40 MB instead of ~150 MB). The chosen
+checkpoint is downloaded on first use from `models.silero.ai` into `models/tts/silero/` — no extra python
+package is installed, `torch` alone loads it. Output is 24 kHz mono. The weights are published under the
+**non-commercial CC BY-NC-SA 4.0** licence (the code is MIT), so check the terms before any commercial use.
 
 ## Fine Tuned TTS models
 #### Fine Tune your own TTS model

@@ -137,7 +137,7 @@ the GPU is left to the other engines. Output is 24 kHz mono.
 | File | Change |
 |------|--------|
 | `lib/conf_models.py` | `TTS_ENGINES["SILERO"] = "silero"` and a `default_engine_settings` entry: one language (`{"rus": "ru"}`), `samplerate: 24000`, `files: []`, `voices: {}`, `rating {"VRAM": 0, "CPU": 5, "RAM": 2, "Realism": 4}`. |
-| `lib/classes/tts_engines/presets/silero_presets.py` | `models = {"internal": {...}}` only — `repo` is the `v5_6_ru.pt` URL on `models.silero.ai`. |
+| `lib/classes/tts_engines/presets/silero_presets.py` | `models` = `internal` (`v5_6_ru`, the default), `v5_5_ru` and `v4_ru`; `repo` is the `.pt` URL on `models.silero.ai`. |
 | `lib/classes/tts_engines/silero.py` | New engine. `load_engine()` downloads the `.pt` with `torch.hub.download_url_to_file` and unpacks it with `torch.package.PackageImporter(...).load_pickle('tts_models', 'model')`; `_speaker_for()` maps a voice file to a built-in speaker; `convert()` copies `qwen3tts.convert()`. |
 | `lib/classes/tts_engines/__init__.py` | `from .silero import Silero` (this is what registers the engine). |
 | `README.md`, `readme/README_rus.md` | `Silero` in the engines list + a usage note (licence, download, CPU). |
@@ -148,19 +148,29 @@ not used — it only wraps the same download.
 
 ### Design notes for future edits
 
-- **Only Russian.** The settings carry a single `{"rus": "ru"}` and the preset points at
-  `…/tts/ru/v5_6_ru.pt`. Silero's other families (CIS/Turkic, the older `v4_ru`, the jit
-  models) live at other URLs and some need the `torch.jit` path instead of
+- **Only Russian.** The settings carry a single `{"rus": "ru"}` and every preset points at
+  a `…/tts/ru/*.pt` URL. Silero's other families (CIS/Turkic/Caucasian, the jit `*_8khz`/
+  `*_16khz` models) live at other URLs and some need the `torch.jit` path instead of
   `torch.package` — that is where to extend.
-- **`v5_6_ru` is the best Russian model** (auto-stress, homographs, questions, emphasis).
-  It has exactly five speakers — `aidar`, `baya`, `kseniya`, `eugene`, `xenia` — and does
-  **not** accept `speaker='random'` (v3/v4 did).
+- **The `lang` field of a preset must be `"multi"` or an E2A language code** (`"rus"`, like
+  the `"eng"` entries of `xtts_presets.py`), *not* the ISO1 code: the GUI builds the model
+  list with `details.get("lang") in ("multi", session['language'])`
+  (`_update_gr_fine_tuned_list` in `lib/gradio.py`), so an unmatched value leaves the
+  dropdown empty and gradio then refuses the default with
+  `Value: internal is not in the list of choices: []`.
+- **`v5_6_ru` is the best Russian model** (auto-stress, homographs, questions, emphasis) and
+  is what `internal` points at; `v5_5_ru` is the same voices without the emphasis
+  intonation, and `v4_ru` is the smaller previous generation (~40 MB, the only one that also
+  advertises `speaker='random'`). The v5 family has exactly five speakers — `aidar`, `baya`,
+  `kseniya`, `eugene`, `xenia` — and does **not** accept `speaker='random'`.
 - **Voice mapping** (`_speaker_for`): a voice file whose stem is a speaker name is used
   as-is; otherwise the gender is read from the directory (`…/adult/male/…` vs
   `…/adult/female/…`, female checked first, deterministic md5 fallback when neither is
   there) and the speaker is handed out round-robin from `speaker_pools` (male
   `aidar`/`eugene`, female `baya`/`kseniya`/`xenia`), cached in `params['voice_speakers']`
-  so a narrator keeps one speaker for the whole book.
+  so a narrator keeps one speaker for the whole book. The pools are intersected with the
+  speakers the loaded checkpoint really has (read from `engine.speakers`), so a variant that
+  ships fewer voices still maps.
 - Spacing and `[emotion:…]` behaviour are copied from `qwen3tts`: `convert()` uses the
   same `trim_audio()` / `_silence_follows()` / `last_audible` rules (so no pause comes
   from a `[voice:…]` switch), and `fine_tuned_params = {}` means the emotion tag reaches
@@ -184,9 +194,10 @@ not used — it only wraps the same download.
 python -c "import ast; [ast.parse(open(p).read()) for p in ('lib/conf_models.py', 'lib/classes/tts_engines/silero.py', 'lib/classes/tts_engines/presets/silero_presets.py', 'lib/classes/tts_engines/__init__.py')]"
 ```
 
-A live run downloads ~148 MB from `models.silero.ai` into `models/tts/silero/`; both the
-engine smoke test and a headless `--tts_engine silero --device cpu` run pass on torch
-2.14.1+cu130.
+A live run downloads the selected checkpoint from `models.silero.ai` into
+`models/tts/silero/` (~150 MB for the `v5_*` ones, ~40 MB for `v4_ru`); `internal`,
+`v5_5_ru` and `v4_ru` all synthesize, and both the engine smoke test and a headless
+`--tts_engine silero --device cpu` run pass on torch 2.14.1+cu130.
 
 ## Fork change: transformers pinned to 4.57.3
 
