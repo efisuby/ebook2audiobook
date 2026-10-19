@@ -454,3 +454,45 @@ must build the Blocks without error (it does, Gradio 6.29.1).
 In the running app: «Анализ книги» fills the table and the descriptions, picking a
 character shows its description and voice, «◉» synthesizes one line, «Собрать SML» shows
 the text preview, «Озвучить» starts the normal conversion, «Отмена»/«Стоп» interrupt it.
+
+## Fork change: Silero survives unpronounceable fragments
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `lib/classes/tts_engines/silero.py` | `convert()` catches the checkpoint's `ValueError` per fragment and skips it, and writes a short silence when a whole sentence produced no audio. |
+| `tests/test_silero_convert.py` | New: 5 tests over a fake checkpoint (`Silero.__new__`, faked `apply_tts`/`audio_save`), so no model is loaded. |
+
+### Design notes for future edits
+
+- The v5 checkpoints raise a **bare `ValueError` with an empty message** from
+  `process_simple_text` for any fragment they cannot pronounce: digits, latin words,
+  stray markup. Measured on `v5_6_ru` (probe `/tmp/opencode/silero_probe.py`):
+  `'1'`, `'12'`, `'II'`, `'OK'`, `'Hello'`, `'H2O'`, `'Mr. Smith…'`, `'№5'`, `'[1]'`,
+  `'@user'`, `'—'`, `'...'`, `'***'` fail; `'5-6'`, `'-'`, `'--'`, `'«-»'` and anything
+  containing a Cyrillic letter succeed. Fragments with no alphanumeric character never
+  reach `apply_tts` (the loop skips them first), so in practice it is **digits and
+  latin text** that trigger the error.
+- One `return False` from `convert()` aborts the entire book
+  (`convert_chapters2audio` stops on `run=False`), and a sentence with no output file
+  later trips `combine_audio_sentences` (`error_missing_sentence_files`). That is why
+  the fix does two things: skip the fragment **and** guarantee a file. A sentence that
+  yields no audio gets `0.3 s` of silence (`torch.zeros(1, samplerate*0.3)`), keeping
+  the per-sentence index alive.
+- The `except ValueError` sits between `except IndexError` and the generic `except
+  Exception`, so a real synthesis failure still returns `False` and, as before, lets
+  `core.py` unload the engine.
+- Consequence to keep in mind: a latin-only or digit-only line is now **silent**, not
+  read aloud. If that ever matters, the place to add number/transliteration handling is
+  `Silero.convert()` right before `apply_tts`, not the checkpoint.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 188 tests
+OK (85 ported + 23 profile + 13 stress + 27 pipeline + 35 wizard + 5 silero).
+
+Real-checkpoint run (`/tmp/opencode/silero_real_check.py`) with `v5_6_ru`:
+`'12345'`, `'...'` and `'Mr. Smith'` each return `(True, None)` with a 57680-byte silent
+wav instead of raising, while `'Привет, мир!'` and `'Глава 2. Он пришёл.'` still
+synthesize normally.

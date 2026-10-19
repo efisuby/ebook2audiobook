@@ -286,6 +286,14 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                             else:
                                 error = 'audio_part not valid'
                                 return False, error
+                        except ValueError as e:
+                            # the checkpoint raises ValueError for a fragment it cannot
+                            # pronounce at all -- digits, latin words, stray markup --
+                            # and there is simply no audio to make: the fragment is
+                            # skipped instead of aborting the whole book
+                            snippet = part if len(part) <= 80 else f'{part[:80]}…'
+                            print(f'{self.tts_engine}: skipped a fragment the checkpoint cannot pronounce: {snippet!r} ({e})')
+                            continue
                         except IndexError as e:
                             self.cleanup_memory()
                             error = f'convert() error at {e} segment: {part}'
@@ -295,6 +303,14 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                             # core.py then unloads the engine via unload_tts_manager().
                             self.cleanup_memory()
                             return False, self.log_exception(f'{self.__class__.__name__}.convert() part loop', e)
+                if not self.audio_segments:
+                    # every fragment was dropped (a sentence of digits, latin or
+                    # punctuation only, or unpronounceable markup): the chapter
+                    # combiner needs a file for this sentence index, so a short
+                    # silence is written instead of leaving the index missing
+                    snippet = sentence if len(sentence) <= 80 else f'{sentence[:80]}…'
+                    print(f'{self.tts_engine}: nothing to pronounce in {snippet!r}, writing a short silence')
+                    self.audio_segments.append(torch.zeros(1, max(1, int(self.params['samplerate'] * 0.3))))
                 if self.audio_segments:
                     segment_tensor = torch.cat(self.audio_segments, dim=-1)
                     if not self.audio_save(sentence_file, segment_tensor, self.params['samplerate']):
