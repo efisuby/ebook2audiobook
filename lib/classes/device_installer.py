@@ -1740,9 +1740,19 @@ class DeviceInstaller():
             return 0
 
     def install_device_packages(self, device_info_str:str)->int:
-        def _tag_ok(installed_tag):
+        def _torchaudio_index_tag(index_tag:str)->str:
+            # torchaudio publishes no CUDA index beyond cu130, and it refuses to load
+            # when its CUDA minor differs from torch's ("PyTorch has CUDA version 13.2
+            # whereas TorchAudio has CUDA version 13.0"), so torch has to come from the
+            # same clamped index as torchaudio.
+            if index_tag.startswith('cu') and index_tag[2:].isdigit() and int(index_tag[2:]) > 130:
+                return 'cu130'
+            return index_tag
+
+        def _tag_ok(installed_tag, expected_tag=None):
+            expected_tag = tag if expected_tag is None else expected_tag
             # CPU index: '/whl/cpu' -> bare on macOS, '+cpu' on linux/windows; both are fine
-            if tag == devices['CPU']['proc']:
+            if expected_tag == devices['CPU']['proc']:
                 return installed_tag is None or installed_tag == devices['CPU']['proc']
             # MPS: installed from '/whl/cpu' on macOS arm64 -> bare wheels
             elif device_info['name'] == devices['MPS']['proc']:
@@ -1751,22 +1761,25 @@ class DeviceInstaller():
             # the linux 'rocmX.Y' keys) but the wheel's local version drops 'win-',
             # e.g. tag='win-rocm7.2.1' -> '+rocm7.2.1' (optionally with a build suffix).
             elif device_info['name'] == devices['ROCM']['proc'] and self.system == systems['WINDOWS']:
-                wheel_tag = tag.replace('win-', '')
+                wheel_tag = expected_tag.replace('win-', '')
                 return installed_tag == wheel_tag or (installed_tag is not None and installed_tag.startswith(f'{wheel_tag}-'))
             # CUDA, XPU, ROCm Linux, Jetson: must be exactly '+<tag>'
             # (a pure hex local version means a custom/dev build -> reinstall)
             elif device_info['name'] == devices['CUDA']['proc'] and self.system == systems['WINDOWS']:
-                wheel_tag = tag.replace('win-', '')
+                wheel_tag = expected_tag.replace('win-', '')
                 return installed_tag == wheel_tag or (installed_tag is not None and installed_tag.startswith(f'{wheel_tag}-'))
-            return installed_tag == tag
+            return installed_tag == expected_tag
 
         def _needs_reinstall():
-            # torch: base version + local tag must match what we'd install for this device
+            # torch: base version + local tag must match what we'd install for this
+            # device; the expected tag is the torchaudio-clamped one, because torch is
+            # installed from the same index as torchaudio (see the install below).
+            expected_tag = _torchaudio_index_tag(tag)
             if not torch_version_current_full:
                 return True
             if torch_version_current_base != torch_version_matrix:
                 return True
-            if not _tag_ok(current_tag):
+            if not _tag_ok(current_tag, expected_tag):
                 return True
             # torchaudio: base version + local tag must match what we'd install for this device.
             # Compare against the CAPPED version, not torch_version_matrix — above the
@@ -1780,7 +1793,7 @@ class DeviceInstaller():
                 return True
             m_ta = re.search(r'\+(.+)$', torchaudio_full)
             torchaudio_tag = m_ta.group(1) if m_ta else None
-            if not _tag_ok(torchaudio_tag):
+            if not _tag_ok(torchaudio_tag, expected_tag):
                 return True
             # torchcodec: presence only (when torch >= 2.9 needs it)
             if self.version_tuple(torch_version_matrix, 2) >= (2, 9) and not self.get_package_version('torchcodec'):
@@ -1874,10 +1887,14 @@ class DeviceInstaller():
                                 subprocess.check_call(self._uv_pip('install', '--reinstall', '--no-cache', '--no-deps', torch_pkg, torchaudio_pkg))
                             else:
                                 url = default_pytorch_url
-                                torch_url_tag = tag_dir
-                                torchaudio_url_tag = 'cu130' if tag_dir.startswith('cu') and tag_dir[2:].isdigit() and int(tag_dir[2:]) > 130 else tag_dir
+                                # torch and torchaudio have to share an index: torchaudio has
+                                # no build newer than cu130 and raises at import time when its
+                                # CUDA minor differs from torch's, so both take the clamped tag.
+                                torchaudio_url_tag = _torchaudio_index_tag(tag_dir)
+                                torch_url_tag = torchaudio_url_tag
                                 if self.system == systems['WINDOWS'] and tag.startswith('win-cu'):
-                                    torch_url_tag = tag.replace('win-', '')
+                                    torch_url_tag = _torchaudio_index_tag(tag.replace('win-', ''))
+                                    torchaudio_url_tag = torch_url_tag
                                 subprocess.check_call(self._uv_pip('install', '--reinstall-package', 'torch', '--no-cache', f'torch=={torch_version_matrix}', '--index-url', f'{url}/{torch_url_tag}'))
                                 subprocess.check_call(self._uv_pip('install', '--reinstall', '--no-cache', '--no-deps', f'torchaudio=={torchaudio_version_matrix}', '--index-url', f'{url}/{torchaudio_url_tag}'))
                             if not self.check_numpy():
@@ -1893,7 +1910,7 @@ class DeviceInstaller():
                                         print(msg)
                                         rc = subprocess.call(self._uv_pip('install', '--reinstall', '--no-cache', '--no-deps', f'torchcodec=={torchcodec_version_matrix}', f'torchcodec-xpu', 'torchlib-xpu', '--extra-index-url', f'{default_pytorch_url}/xpu'))
                                     else:
-                                        torchcodec_index_url = f'{default_pytorch_url}/cpu' if device_info['name'] == devices['ROCM']['proc'] else f'{default_pytorch_url}/{tag_dir}'
+                                        torchcodec_index_url = f'{default_pytorch_url}/cpu' if device_info['name'] == devices['ROCM']['proc'] else f'{default_pytorch_url}/{_torchaudio_index_tag(tag_dir)}'
                                         rc = subprocess.check_call(self._uv_pip('install', '--reinstall', '--no-cache', '--no-deps', f'torchcodec=={torchcodec_version_matrix}', '--index-url', torchcodec_index_url))
                                 if rc == 0:
                                     try:

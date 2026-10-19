@@ -20,4 +20,7 @@ models/*
 !audiobooks/gui/gradio/.gitkeep
 !audiobooks/gui/host/.gitkeep
 .installed
+.device_info.json
+# downloaded voice library (see voices/.version.json); not tracked upstream
+voices/
 .env
