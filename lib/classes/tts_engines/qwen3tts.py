@@ -118,17 +118,6 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
             error = f'load_engine() error: {e}'
             raise RuntimeError(error) from e
 
-    def _trailing_silence(self)->float:
-        # seconds of silence sitting at the end of self.audio_segments
-        import torch
-        total = 0.0
-        for segment in reversed(self.audio_segments):
-            if torch.count_nonzero(segment) == 0:
-                total += segment.shape[-1] / self.params['samplerate']
-            else:
-                break
-        return total
-
     @classmethod
     def _silence_follows(cls, sentence_parts:list[str], index:int)->bool:
         # True when the next thing that produces audio after sentence_parts[index] is an
@@ -179,7 +168,6 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                     (i for i, p in enumerate(sentence_parts) if any(c.isalnum() for c in p.strip())),
                     default=-1
                 )
-                previous_voice = None
                 for index, part in enumerate(sentence_parts):
                     part = part.strip()
                     if not part:
@@ -196,13 +184,6 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                             part = part[:-1]
                         ref_audio = self.params['current_voice']
                         part_sr = self.params['samplerate']
-                        if previous_voice is not None and ref_audio != previous_voice:
-                            # a speaker change is a pause of its own: top up whatever silence
-                            # is already there to a short gap, so the new voice does not start
-                            # on the heels of the previous one
-                            gap = int(np.random.uniform(0.3, 0.5) * 100) / 100 - self._trailing_silence()
-                            if gap > 0:
-                                self.audio_segments.append(torch.zeros(1, int(self.params['samplerate'] * gap)))
                         try:
                             with torch.inference_mode():
                                 try:
@@ -241,7 +222,6 @@ class Qwen3TTS(TTSUtils, TTSRegistry, name='qwen3tts'):
                                 if emotion_gain and float(emotion_gain) != 1.0:
                                     part_tensor = part_tensor * float(emotion_gain)
                                 self.audio_segments.append(part_tensor)
-                                previous_voice = ref_audio
                                 # a fragment that does not end on a word gets a pause of its own,
                                 # but only when nothing else already pauses for it: stacking the
                                 # punctuation pause on top of a [break]/[pause] (or on the last

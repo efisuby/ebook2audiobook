@@ -108,11 +108,10 @@ needed. Output is 24 kHz mono.
     `_silence_follows()` looks past structural tags (`voice`, `emotion`) and past
     punctuation-only fragments to see whether a `[break]`/`[pause]` is coming — and
     always on the last fragment that carries words (`last_audible`), otherwise two
-    sentences would be glued together now that the trailing padding is gone,
-  - tops the silence already at the tail up to 0.3–0.5 s before a fragment whose voice
-    differs from the previous one (`previous_voice` + `_trailing_silence()`), because a
-    speaker change is a pause of its own. A `[break]`/`[pause]` next to a switch still
-    wins: the top-up only adds what is missing.
+    sentences would be glued together now that the trailing padding is gone.
+  Nothing else spaces the fragments out: in particular a `[voice:…]` switch inserts no
+  pause of its own — spacing at a speaker change comes from the tags the SML writer put
+  there.
 - `unload_tts_manager()` needs no `engine.unload()`; it drops `loaded_tts[key]`
   and frees the GPU.
 
