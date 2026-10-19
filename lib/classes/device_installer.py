@@ -10,8 +10,10 @@ class DeviceInstaller():
     device_pkgs = ['onnxruntime', 'transformers']
     # Installed with --no-deps: their runtime deps ship in requirements.txt, so the
     # resolver must not follow their own pins (qwen-tts asks for transformers==4.57.3,
-    # which select_pkg('transformers') pins globally anyway).
-    no_deps_pkgs = ['qwen-tts']
+    # which select_pkg('transformers') pins globally anyway). silero-stress only needs
+    # torch, which the installer provides from its own index: resolved normally it
+    # would pull a second torch from PyPI.
+    no_deps_pkgs = ['qwen-tts', 'silero-stress']
     torchaudio_max = '2.11.0'
     # installed torch below the key -> transformers must stay below the value.
     # 2.4: 5.1+ declares torch>=2.4 and silently disables PyTorch below it.

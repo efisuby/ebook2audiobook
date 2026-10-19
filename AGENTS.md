@@ -137,13 +137,15 @@ the GPU is left to the other engines. Output is 24 kHz mono.
 | File | Change |
 |------|--------|
 | `lib/conf_models.py` | `TTS_ENGINES["SILERO"] = "silero"` and a `default_engine_settings` entry: one language (`{"rus": "ru"}`), `samplerate: 24000`, `files: []`, `voices: {}`, `rating {"VRAM": 0, "CPU": 5, "RAM": 2, "Realism": 4}`. |
-| `lib/classes/tts_engines/presets/silero_presets.py` | `models` = `internal` (`v5_6_ru`, the default), `v5_5_ru` and `v4_ru`; `repo` is the `.pt` URL on `models.silero.ai`. |
+| `lib/classes/tts_engines/presets/silero_presets.py` | `models` = `internal` (`v5_6_ru`, the default), `v5_5_ru` and `v4_ru`; `repo` is the `.pt` URL on `models.silero.ai`, each entry carries the optional `"stress"` flag. |
 | `lib/classes/tts_engines/silero.py` | New engine. `load_engine()` downloads the `.pt` with `torch.hub.download_url_to_file` and unpacks it with `torch.package.PackageImporter(...).load_pickle('tts_models', 'model')`; `_speaker_for()` maps a voice file to a built-in speaker; `convert()` copies `qwen3tts.convert()`. |
 | `lib/classes/tts_engines/__init__.py` | `from .silero import Silero` (this is what registers the engine). |
-| `README.md`, `readme/README_rus.md` | `Silero` in the engines list + a usage note (licence, download, CPU). |
+| `requirements.txt` | `silero-stress` — the text pre-processing (stress marks + homograph resolution). |
+| `lib/classes/device_installer.py` | `no_deps_pkgs += ['silero-stress']`, so uv does not resolve its `torch` from PyPI. |
+| `README.md`, `readme/README_rus.md` | `Silero` in the engines list + a usage note (licence, download, CPU, stress). |
 
-`requirements.txt` is untouched: the checkpoint is a torch-package file loaded straight
-from disk, so nothing but `torch` is needed. The `silero` PyPI package is deliberately
+The checkpoint is a torch-package file loaded straight from disk, so the synthesis itself
+needs nothing but `torch`; only the stress pre-processing is an extra package. The `silero` PyPI package is deliberately
 not used — it only wraps the same download.
 
 ### Design notes for future edits
@@ -171,6 +173,20 @@ not used — it only wraps the same download.
   so a narrator keeps one speaker for the whole book. The pools are intersected with the
   speakers the loaded checkpoint really has (read from `engine.speakers`), so a variant that
   ships fewer voices still maps.
+- **Stress pre-processing** (`_accent`): every plain text fragment is run through
+  `silero_stress.load_accentor()` before `apply_tts()`. The accentor is loaded lazily on the
+  first fragment (~1.5 s once per engine) and costs ~0.02 s per sentence. The v5/v4 archives
+  already embed an accentor and a homograph solver (`models/accentor.py`,
+  `models/homosolver.py` inside the package), but they honour explicit `+` marks —
+  `зам+ок` and `замо+к` synthesize differently — so the newer standalone model decides.
+  Measured on `v5_6_ru`, the pre-accented text gave byte-identical audio to the built-in
+  accentor on most sentences and a different take on `Уже 3 часа мы едем в поезде.`.
+  Only the text between SML tags is accented (tags and voice paths must never be touched),
+  so a homograph is solved per fragment, without the full sentence around it.
+  `Silero.stress_enabled = True` is the class default, a preset entry overrides it with
+  `"stress": False`, and a missing or broken `silero_stress` only prints a warning and falls
+  back to the raw text — it never fails the sentence. The installed package (`silero-stress`
+  1.5, wheel ~37 MB, 65 MB unpacked) ships the weights; nothing is downloaded at runtime.
 - Spacing and `[emotion:…]` behaviour are copied from `qwen3tts`: `convert()` uses the
   same `trim_audio()` / `_silence_follows()` / `last_audible` rules (so no pause comes
   from a `[voice:…]` switch), and `fine_tuned_params = {}` means the emotion tag reaches
@@ -186,7 +202,8 @@ not used — it only wraps the same download.
   files), because the speaker choice happens inside the engine.
 - `apply_tts()` exposes no `speed` and no `ssml` switch (SSML goes through `ssml_text=`),
   but it does take `voice_path=`, which is the extension point if real cloning is wanted.
-- **Licence:** the weights are CC BY-NC-SA 4.0 (non-commercial); the package code is MIT.
+- **Licence:** the Silero weights are CC BY-NC-SA 4.0 (non-commercial); the Silero package
+  code and `silero-stress` are MIT.
 
 ### How to check
 
@@ -198,6 +215,12 @@ A live run downloads the selected checkpoint from `models.silero.ai` into
 `models/tts/silero/` (~150 MB for the `v5_*` ones, ~40 MB for `v4_ru`); `internal`,
 `v5_5_ru` and `v4_ru` all synthesize, and both the engine smoke test and a headless
 `--tts_engine silero --device cpu` run pass on torch 2.14.1+cu130.
+
+The stress pre-processing needs `silero-stress` (installed with `--no-deps`, like the
+rest of `requirements.txt`): `engine._accent('замок')` must return `'зам+ок'`, and with
+`engine.use_stress = False` the same call must return the text unchanged. An A/B of
+`convert()` with and without the marks must differ for a sentence whose reading the
+marks change (e.g. `Уже 3 часа мы едем в поезде.`).
 
 ## Fork change: transformers pinned to 4.57.3
 

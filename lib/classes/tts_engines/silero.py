@@ -21,6 +21,14 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
         'female': ('baya', 'kseniya', 'xenia')
     }
 
+    # The checkpoints carry an accentor of their own, but it is older than the
+    # standalone silero-stress model, which also solves homographs — and the
+    # checkpoints honour explicit '+' marks ('зам+ок' and 'замо+к' synthesize
+    # differently), so the newer accentor gets the last word. Every plain text
+    # fragment therefore goes through silero-stress before the synthesis; a
+    # preset entry can set "stress": False to feed the raw text instead.
+    stress_enabled = True
+
     def __init__(self, session:DictProxy):
         try:
             self.session = session
@@ -29,6 +37,7 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
             self.tts_key = self.session['model_cache']
             self.resampler_cache = {}
             self.audio_segments = []
+            self.accentor = None
             self.tts_engine = self.session.get('tts_engine')
             self.models = load_engine_presets(self.tts_engine)
             self.params = {
@@ -60,6 +69,7 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                     error = legends['error_fine_tuned_missing_key'].format(model=fine_tuned, key=required_key)
                     raise ValueError(error)
             self.params['samplerate'] = model_cfg['samplerate']
+            self.use_stress = bool(model_cfg.get('stress', self.stress_enabled))
             self.model_path = model_cfg['repo']
             # Silero's checkpoints are CPU TorchScript packages: a sentence takes
             # tens of milliseconds, so the GPU is left to the other engines.
@@ -170,6 +180,35 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                 return False
         return False
 
+    def _load_accentor(self)->Any:
+        # silero-stress is pure torch, but it is still an extra package: a missing
+        # or broken install loses the accent marks and must not fail the sentence,
+        # so the failure is remembered and the text is used as it came in.
+        if self.accentor is None:
+            try:
+                from silero_stress import load_accentor
+                self.accentor = load_accentor()
+            except Exception as e:
+                print(f'{self.tts_engine}: silero-stress unavailable, the text is synthesized without stress marks: {e}')
+                self.accentor = False
+        return self.accentor or None
+
+    def _accent(self, text:str)->str:
+        # accents the fragment ('замок' -> 'зам+ок') so that the checkpoint's
+        # generator pronounces it as silero-stress decided; SML tags are never
+        # passed here, only the plain text between them.
+        if not self.use_stress:
+            return text
+        accentor = self._load_accentor()
+        if accentor is None:
+            return text
+        try:
+            accented = accentor(text)
+        except Exception as e:
+            self.log_exception(f'{self.__class__.__name__}._accent()', e)
+            return text
+        return accented or text
+
     def convert(self, sentence_file:str, sentence:str, **kwargs)->tuple:
         try:
             import torch
@@ -206,6 +245,7 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                     else:
                         if part.endswith("'"):
                             part = part[:-1]
+                        part = self._accent(part)
                         part_sr = self.params['samplerate']
                         try:
                             with torch.inference_mode():

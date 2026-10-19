@@ -470,9 +470,16 @@ character keeps its own speaker for the whole book. Only Russian is supported; `
 Pick the checkpoint in the `Fine Tuned` list: `internal` (the default) is `v5_6_ru`, the newest of the family
 with automatic stress, homographs, question and emphasis intonation; `v5_5_ru` is the same voices without the
 emphasis intonation, and `v4_ru` is the smaller previous generation (~40 MB instead of ~150 MB). The chosen
-checkpoint is downloaded on first use from `models.silero.ai` into `models/tts/silero/` — no extra python
-package is installed, `torch` alone loads it. Output is 24 kHz mono. The weights are published under the
-**non-commercial CC BY-NC-SA 4.0** licence (the code is MIT), so check the terms before any commercial use.
+checkpoint is downloaded on first use from `models.silero.ai` into `models/tts/silero/` — the checkpoint needs
+nothing but `torch` to load. Output is 24 kHz mono.
+
+Every fragment is pre-processed with `Silero Stress` (`silero-stress`, MIT, bundled with the other requirements):
+it writes the stress and solves the homographs of the Russian text (`замок` → `зам+ок`), and the checkpoints
+honour those marks, so this newer accentor decides rather than the one packed into the checkpoint. It costs a
+couple of milliseconds per sentence; add `"stress": False` to a checkpoint entry in
+`lib/classes/tts_engines/presets/silero_presets.py` to synthesize the raw text instead. The weights are
+published under the **non-commercial CC BY-NC-SA 4.0** licence (the code is MIT), so check the terms before any
+commercial use.
 
 ## Fine Tuned TTS models
 #### Fine Tune your own TTS model

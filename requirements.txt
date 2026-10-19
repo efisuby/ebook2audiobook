@@ -62,3 +62,8 @@ accelerate
 librosa
 einops
 sox
+# Silero engine pre-processing: marks the stress and solves the homographs of
+# the russian text before the checkpoint synthesizes it. Installed with
+# --no-deps by the device installer; its only dependency is torch, which the
+# installer provides from its own index. See AGENTS.md.
+silero-stress
