@@ -302,3 +302,39 @@ OK (85 ported + 23 profile). For the real path run `/tmp/opencode/profile_e2e.py
 BookNLP (small, `rus`) over a short Russian text, then `describe_characters` with the
 real model — `Narrator` and thin characters must stay `heuristic`, the rest `llm`, and
 no description may mention another character's features.
+
+## Fork change: the SML stress pre-processing (`sml_extractor/stress.py`)
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `sml_extractor/stress.py` | New: accents the plain prose of an SML text with silero-stress (`замок` → `зам+ок`), or strips those marks again. |
+| `tests/test_stress.py` | New: 13 tests (accenting only outside tags, non-`+` plus signs survive, engine routing). |
+| `lib/classes/tts_engines/silero.py` | Untouched by this step: the engine keeps its own lazy `_accent()` as a second, idempotent layer. |
+
+### Design notes for future edits
+
+- Only Silero's checkpoints understand the marks: every other engine would read the `+`
+  as a character, so the pipeline accents the text for `silero` and strips the marks for
+  everything else (`stress_for_engine(text, tts_engine)`).
+- SML tags and the voice paths inside them are never touched: `_outside_tags()` splits on
+  a local copy of the tag regex and only decorates the text chunks. Keep the tag names in
+  sync with `TTS_SML` in `lib/conf_models.py` — the module is deliberately independent of
+  the rest of E2A so that it can be tested and reused on its own.
+- A mark is a `+` *before a vowel* only, so `2+2`, `A+B` and `C+1` are never changed.
+- The local tag regex also matches the closing tags (`[/voice]`), so an accented block
+  keeps its exact shape; `strip_sml` of an accented text returns exactly the input, which
+  makes the non-Silero route safe when a book already carries marks.
+- `get_accentor()` loads the model lazily (one ~1.5 s hit per process) and remembers a
+  failure (`[stress] silero-stress unavailable, the text is left unaccented: …`), so a
+  missing package degrades to the unaccented text instead of failing the book. Use
+  `reset_accentor()` in tests.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 121 tests
+OK (85 ported + 23 profile + 13 stress). With the real package installed,
+`accent_sml('[voice:/v/rus/adult/male/Petr.wav]Замок был на двери, а замок стоял на реке.[/voice]')`
+must mark the prose and leave the tag and its path verbatim, `strip_sml` of the result
+must return the input, and `stress_for_engine(text, 'xtts')` must strip the marks.
