@@ -85,14 +85,12 @@ def generate_sml_output(
     Returns:
         Path to the generated SML file.
     """
-    char_voice_map = _build_voice_map(characters, voice_assignments)
-    segments = _book_segments(booknlp_data)
-
-    sml_content = _render_segments(
-        segments,
-        char_voice_map,
+    sml_content = render_sml_text(
+        booknlp_data,
+        characters,
+        voice_assignments=voice_assignments,
         use_macros=use_macros,
-        emotion_map=emotion_map or {},
+        emotion_map=emotion_map,
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -116,6 +114,41 @@ def collect_speech_segments(booknlp_data: dict) -> list:
         if cleaned:
             collected.append((speaker, cleaned))
     return collected
+
+
+def book_segments(booknlp_data: dict) -> list:
+    """Raw ``(speaker|None, text)`` segments for the available book data.
+
+    A ``None`` speaker marks narration (or a pass-through line): E2A reads
+    those with the narrator voice, while a named speaker gets its own
+    ``[voice:...]`` block in the SML.  Kept public for the wizard, which shows
+    the opening of the book and picks one line per character to preview.
+    """
+    return _book_segments(booknlp_data)
+
+
+def render_sml_text(
+    booknlp_data: dict,
+    characters: list,
+    voice_assignments: dict | None = None,
+    use_macros: bool = True,
+    emotion_map: dict | None = None,
+) -> str:
+    """Render ``booknlp_data`` as an SML document and return the text.
+
+    The wizard needs the text itself (to preview it, to mark the stress and to
+    hand it to the synthesizer), so this is the single place that pairs the
+    voice map with the segments; :func:`generate_sml_output` only writes it to
+    disk.
+    """
+    char_voice_map = _build_voice_map(characters, voice_assignments)
+    segments = _book_segments(booknlp_data)
+    return _render_segments(
+        segments,
+        char_voice_map,
+        use_macros=use_macros,
+        emotion_map=emotion_map or {},
+    )
 
 
 def _book_segments(booknlp_data: dict) -> list:

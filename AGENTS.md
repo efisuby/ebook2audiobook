@@ -340,3 +340,53 @@ OK (85 ported + 23 profile + 13 stress). With the real package installed,
 `accent_sml('[voice:/v/rus/adult/male/Petr.wav]Замок был на двери, а замок стоял на реке.[/voice]')`
 must mark the prose and leave the tag and its path verbatim, `strip_sml` of the result
 must return the input, and `stress_for_engine(text, 'xtts')` must strip the marks.
+
+## Fork change: the SML wizard glue (`sml_extractor/pipeline.py`)
+
+The step-by-step path the wizard walks lives here, so the GUI only has to call
+one function per step and keep the paths in the session: `analyze_book` (BookNLP
++ characters), `describe_characters`, `cast_characters`, `character_rows`,
+`sample_line`, `preview_lines`, `build_sml`, `sml_blocks`, `stress_preview`.
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `sml_extractor/pipeline.py` | New: the glue between the ported pipeline and E2A. |
+| `sml_extractor/sml_generator.py` | `book_segments()` and `render_sml_text()` are public now; `generate_sml_output()` only writes what `render_sml_text()` returns, so the document has one builder. |
+| `tests/test_pipeline.py` | New: 27 tests over fake book data, a temporary voice library and patched accentor/emotion steps. |
+
+### Design notes for future edits
+
+- The module imports no E2A code: language, engine and the library root are arguments,
+  which is what lets the tests drive the whole path. `APP_ROOT` is the E2A checkout
+  (where `voices/` and `data/` live) so a caller can pass nothing and still get the right
+  defaults.
+- `analyze_book()` keeps the token and quote tables in memory and returns paths only:
+  the session stores paths and `load_book()` re-reads the analysis, so a restart costs a
+  load, not a BookNLP run.
+- `cast_characters()` returns the cast *and appends* the records to the `characters` list
+  it was given: the narrator is always part of it, and a speaker the analysis missed gets
+  an `unknown`/`adult` record, so a later `describe_characters()` covers that speaker too.
+  Voice precedence: the override map, then the character's own `voice`, then the
+  automatic assignment by gender and age. Library paths come back relative
+  (`voices/<lang>/<age>/<gender>/<file>`) and are made absolute against the root — that
+  relative form is what `[voice:…]` tags in a saved document should carry.
+- `character_rows()` sorts the narrator first, then by the number of quotes, then by the
+  order of `characters` (not alphabetically) so the table matches the book.
+- `sample_line()` never raises on a book without data: the wizard asks for a sample before
+  a character is known to have a line.
+- `build_sml()` runs the emotion model (which itself falls back to the heuristic), renders
+  the document and only then applies the stress step: marks for Silero, stripped for every
+  other engine, so one document can be re-targeted. `sml_blocks()` is the bridge to E2A —
+  the writer puts every voice block on one line, and one line is one block.
+- `preview_lines()` is the "one line per character plus the opening of the book" text the
+  user reads before anything is synthesized; it is text, not audio.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 148 tests
+OK (85 ported + 23 profile + 13 stress + 27 pipeline).
+`/tmp/opencode/pipeline_smoke.py` walks the whole path without BookNLP or the model: a
+four-line book with two quotes, then cast, rows, sample lines, preview, stress preview
+(`+` for `silero`, clean for `xtts`) and the SML blocks.
