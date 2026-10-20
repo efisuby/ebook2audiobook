@@ -45,6 +45,7 @@ from lib.classes.bug_reporter import bug_reporter
 from lib.classes.vram_detector import VRAMDetector
 from lib.classes.voice_extractor import VoiceExtractor
 from lib.classes.non_text_filter import NonTextFilter
+from sml_extractor import stress as sml_stress
 #from lib.classes.redirect_console import RedirectConsole
 from lib.classes.argos_translator import ArgosTranslator
 from lib.classes.tts_manager import TTSManager
@@ -211,6 +212,9 @@ class SessionContext:
             "sml_selected": None,
             "sml_text": None,
             "sml_applied": False,
+            # «Разные голоса»: on — every character keeps its own voice (the
+            # default), off — the whole book is read by one voice (the narrator's)
+            "sml_multi_voices": True,
             ####### Xtts settings
             "xtts_temperature": default_engine_settings[TTS_ENGINES['XTTS']]['temperature'],
             #"xtts_codec_temperature": default_engine_settings[TTS_ENGINES['XTTS']]['codec_temperature'],
@@ -1670,6 +1674,10 @@ def filter_blocks(session_id:str, idx:int, doc:EpubHtml, stanza_nlp:Pipeline, is
             break_between_alnum_re = re.compile(rf'(?<=[\w]){break_token}(?=[\w])', flags=re.UNICODE)
             text = strip_break_spaces_re.sub(sml_token('break'), text)
             text = break_between_alnum_re.sub(' ', text)
+            # stress marks must not be present while the normalizers run:
+            # math2words would verbalize '+' into the word «плюс». They are
+            # re-applied as the very last stage below.
+            text = sml_stress.strip_sml(text)
             # strip non-prose content; preserves math signs for math2words
             text = non_text_filter(text)
             # escape all SML tags to not be touched by any text treatment
@@ -1743,6 +1751,12 @@ def filter_blocks(session_id:str, idx:int, doc:EpubHtml, stanza_nlp:Pipeline, is
             print(msg)
             text = normalize_text(text, lang, lang_iso1, tts_engine)
             text = restore_sml(text, sml_blocks)
+            # stress is the LAST stage: only now, after every normalizer,
+            # the '+' marks can be written without being verbalized or stripped
+            if sml_stress.is_silero(tts_engine) and session.get('sml_use_stress', True):
+                msg = legends.get('msg_apply_stress') or 'Applying stress marks…'
+                print(msg)
+                text = sml_stress.stress_for_engine(text, tts_engine)
             return text
         return None
     except Exception as e:
@@ -1876,6 +1890,11 @@ def get_sentences(session_id:str, text:str)->list|None:
         rest = segment
         hard_set = tuple(punctuation_split_hard_set)
         soft_set = tuple(punctuation_split_soft_set)
+        # A soft break (comma, colon, ...) makes the TTS engine end the sentence
+        # intonationally, so it must never be preferred over a plain space: a
+        # sentence that does not fit would otherwise be chopped at its first
+        # comma and sound like two sentences.  Only fall back to a soft
+        # punctuation when a space cannot be found near the cap.
         while rest:
             if _clean_len(rest) <= max_chars:
                 results.append(rest.strip())
@@ -1887,17 +1906,17 @@ def get_sentences(session_id:str, text:str)->list|None:
                 if cut[i] in hard_set:
                     best_idx = i + 1
                     break
-            # 2) no hard punct -> regress to the last soft punctuation
+            # 2) no hard punct -> break at the last space (a neutral point)
+            if best_idx == -1:
+                idx = cut.rfind(' ')
+                if idx > 0:
+                    best_idx = idx
+            # 3) no space either -> last soft punctuation (rare, e.g. CJK text)
             if best_idx == -1:
                 for i in range(len(cut) - 1, -1, -1):
                     if cut[i] in soft_set:
                         best_idx = i + 1
                         break
-            # 3) no punctuation at all -> fall back to last space
-            if best_idx == -1:
-                idx = cut.rfind(' ')
-                if idx > 0:
-                    best_idx = idx
             # 4) last resort -> hard cut at max_chars
             if best_idx <= 0:
                 best_idx = max_chars
@@ -1921,7 +1940,12 @@ def get_sentences(session_id:str, text:str)->list|None:
         if session.get('translate_enabled') and session.get('translate'):
             lang = session['translate']
         tts_engine = session['tts_engine']
-        max_chars = int(language_mapping[lang]['max_chars'] / 2)
+        # Sentence size cap.  It used to be max_chars/2 (91 chars for «rus»),
+        # which is smaller than an ordinary sentence: a long sentence was then
+        # force-split, and the cut landed on an internal comma, so the engine
+        # ended the intonation mid-sentence.  1024 keeps any realistic sentence
+        # in one block; _force_split_segment still guards a pathological one.
+        max_chars = SENTENCE_MAX_CHARS
         text, sml_blocks = escape_sml(text)
         assert not SML_TAG_PATTERN.search(text)
         if session['is_gui_process']:
@@ -2031,10 +2055,12 @@ def get_sentences(session_id:str, text:str)->list|None:
 
         final_list = [_strip_leading_noise(s) for s in final_list if s.strip()]
         final_list = [s for s in final_list if s]
-        # Merge orphan-short sentences. A sentence below max_chars/2 is "too short";
-        # absorb it into the previous (preferred) or next sentence when that fits.
+        # Merge orphan-short sentences. A sentence below max_chars/2 is "too
+        # short"; absorb it into the previous (preferred) or next sentence when
+        # that fits.  The ceiling is the sentence cap itself, so merging can
+        # never push a piece above it.
         merge_threshold = max_chars // 2
-        merge_ceiling   = max_chars + max_chars // 2   # max_chars + overhead of max_chars/2
+        merge_ceiling   = max_chars
         merged_list = []
         i = 0
         n = len(final_list)

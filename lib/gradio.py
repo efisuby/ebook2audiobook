@@ -110,7 +110,63 @@ def build_interface(args:dict)->gr.Blocks:
                                     with gr.Row(elem_id='gr_row_session'):
                                         gr_session = gr.Textbox(label='', elem_id='gr_session', interactive=False)
                                         gr_session_switch_btn = gr.Button('🔒︎', elem_id='gr_session_switch_btn', elem_classes=['small-btn-purple'], variant='secondary', visible=True, interactive=True, scale=0, min_width=60)
+                                        gr_session_reset_btn = gr.Button('↻ Сброс сессии', elem_id='gr_session_reset_btn', elem_classes=['small-btn-red'], variant='secondary', visible=True, interactive=True, scale=0, min_width=120)
 
+                        # ── the book-to-SML wizard ───────────────────────────────
+                        # one path: analyse the book, describe and cast the characters,
+                        # listen to a single line of each, then synthesize the whole book
+                        with gr.Group(elem_id='gr_group_sml_wizard') as gr_group_sml_wizard:
+                            gr_sml_css = gr.HTML(
+                                value='<style>#gr_sml_characters table td:nth-child(5) { max-width: 300px; white-space: normal; word-break: break-word; }</style>',
+                                elem_id='gr_sml_css'
+                            )
+                            gr_sml_markdown = gr.Markdown(
+                                '### 🎭 Озвучка с ролями (SML)\n'
+                                'Загрузите книгу или вставьте текст выше, затем: «Анализ книги» → '
+                                'описания и голоса персонажей → «Собрать SML» → прослушайте по одной '
+                                'реплике на персонажа → «Озвучить».'
+                            )
+                            gr_sml_status = gr.Textbox(label='Состояние', elem_id='gr_sml_status', interactive=False, lines=2)
+                            with gr.Row():
+                                gr_sml_analyze_btn = gr.Button('🔎 Анализ книги', elem_id='gr_sml_analyze_btn', variant='primary')
+                                gr_sml_build_btn = gr.Button('🏷 Собрать SML', elem_id='gr_sml_build_btn')
+                            gr_sml_multi_voice = gr.Checkbox(
+                                label='Разные голоса',
+                                info='Выключен — весь текст читает один голос (голос рассказчика); голоса персонажей сохраняются.',
+                                value=True,
+                                elem_id='gr_sml_multi_voice',
+                                interactive=True,
+                            )
+                            gr_sml_characters = gr.Dataframe(
+                                headers=['Персонаж', 'Пол', 'Возраст', 'Реплик', 'Описание', 'Голос'],
+                                datatype='str',
+                                elem_id='gr_sml_characters',
+                                interactive=False,
+                                wrap=True,
+                                col_count=(6, 'fixed'),
+                            )
+                            with gr.Row():
+                                gr_sml_character_pick = gr.Dropdown(label='Персонаж', elem_id='gr_sml_character_pick', choices=[], value=None, type='value', interactive=True, scale=2)
+                                gr_sml_listen_btn = gr.Button('◉', elem_id='gr_sml_listen_btn', scale=0)
+                            with gr.Row():
+                                gr_sml_gender = gr.Dropdown(label='Пол', elem_id='gr_sml_gender', choices=['male', 'female', 'unknown'], value=None, type='value', interactive=True)
+                                gr_sml_age = gr.Dropdown(label='Возраст', elem_id='gr_sml_age', choices=['child', 'teen', 'adult', 'elder', 'unknown'], value=None, type='value', interactive=True, allow_custom_value=True)
+                                gr_sml_delete_btn = gr.Button('🗑 Удалить персонажа', elem_id='gr_sml_delete_btn')
+                            gr_sml_description = gr.Textbox(label='Описание персонажа', elem_id='gr_sml_description', interactive=False, lines=3)
+                            with gr.Row():
+                                gr_sml_voice_pick = gr.Dropdown(label='Голос', elem_id='gr_sml_voice_pick', choices=[], value=None, type='value', interactive=True, scale=4, allow_custom_value=True)
+                                gr_sml_preview_player = gr.Audio(elem_id='gr_sml_preview_player', type='filepath', autoplay=True, buttons=None, waveform_options=gr.WaveformOptions(show_recording_waveform=False), min_width=240, scale=1)
+                            gr_sml_preview = gr.Textbox(label='Предпросмотр', elem_id='gr_sml_preview', interactive=False, lines=10)
+                            with gr.Row():
+                                gr_sml_apply_btn = gr.Button('🎧 Озвучить', elem_id='gr_sml_apply_btn', variant='primary')
+                                gr_sml_apply_5min_btn = gr.Button('🎧 Озвучить 5 минут', elem_id='gr_sml_apply_5min_btn', variant='secondary')
+                                gr_sml_stop_btn = gr.Button('⏹ Стоп', elem_id='gr_sml_stop_btn')
+                                gr_sml_cancel_btn = gr.Button('✖ Отмена', elem_id='gr_sml_cancel_btn')
+
+                        # ── conversion status and the generated files ───────────
+                        # kept at the very bottom, right under the voicing buttons,
+                        # so the progress of the running conversion is what the
+                        # user sees after pressing «Озвучить»
                         with gr.Group(elem_id='gr_group_progress', elem_classes=['gr-group-no-col']):
                             gr_progress_markdown = gr.Markdown(elem_id='gr_progress_markdown', elem_classes=['gr-markdown'], value=legends['gr_progress_markdown'])
                             gr_progress = gr.Textbox(elem_id='gr_progress', label='', interactive=False, visible=True)
@@ -138,51 +194,11 @@ def build_interface(args:dict)->gr.Blocks:
                             gr_audiobook_files = gr.Files(label='', elem_id='gr_audiobook_files', visible=False)
                             gr_audiobook_files_state = gr.State(False)
 
-                        with gr.Group(elem_id='gr_group_convert_btn', elem_classes=['gr-group-convert-btn']) as gr_group_convert_btn:
+                        # the wizard's «Озвучить» / «Озвучить 5 минут» start the
+                        # conversion themselves, so the old 📚 button only duplicated
+                        # them: kept hidden so every handler wired to it still works
+                        with gr.Group(elem_id='gr_group_convert_btn', elem_classes=['gr-group-convert-btn'], visible=False) as gr_group_convert_btn:
                             gr_convert_btn = gr.Button(elem_id='gr_convert_btn', value='📚', elem_classes='gr-convert-btn', variant='primary', interactive=False)
-
-                        # ── the book-to-SML wizard ───────────────────────────────
-                        # one path: analyse the book, describe and cast the characters,
-                        # listen to a single line of each, then synthesize the whole book
-                        with gr.Group(elem_id='gr_group_sml_wizard') as gr_group_sml_wizard:
-                            gr_sml_css = gr.HTML(
-                                value='<style>#gr_sml_characters table td:nth-child(5) { max-width: 300px; white-space: normal; word-break: break-word; }</style>',
-                                elem_id='gr_sml_css'
-                            )
-                            gr_sml_markdown = gr.Markdown(
-                                '### 🎭 Озвучка с ролями (SML)\n'
-                                'Загрузите книгу или вставьте текст выше, затем: «Анализ книги» → '
-                                'описания и голоса персонажей → «Собрать SML» → прослушайте по одной '
-                                'реплике на персонажа → «Озвучить».'
-                            )
-                            gr_sml_status = gr.Textbox(label='Состояние', elem_id='gr_sml_status', interactive=False, lines=2)
-                            with gr.Row():
-                                gr_sml_analyze_btn = gr.Button('🔎 Анализ книги', elem_id='gr_sml_analyze_btn', variant='primary')
-                                gr_sml_build_btn = gr.Button('🏷 Собрать SML', elem_id='gr_sml_build_btn')
-                            gr_sml_characters = gr.Dataframe(
-                                headers=['Персонаж', 'Пол', 'Возраст', 'Реплик', 'Описание', 'Голос'],
-                                datatype='str',
-                                elem_id='gr_sml_characters',
-                                interactive=False,
-                                wrap=True,
-                                col_count=(6, 'fixed'),
-                            )
-                            with gr.Row():
-                                gr_sml_character_pick = gr.Dropdown(label='Персонаж', elem_id='gr_sml_character_pick', choices=[], value=None, type='value', interactive=True, scale=2)
-                                gr_sml_listen_btn = gr.Button('◉', elem_id='gr_sml_listen_btn', scale=0)
-                            with gr.Row():
-                                gr_sml_gender = gr.Dropdown(label='Пол', elem_id='gr_sml_gender', choices=['male', 'female', 'unknown'], value=None, type='value', interactive=True)
-                                gr_sml_age = gr.Dropdown(label='Возраст', elem_id='gr_sml_age', choices=['child', 'teen', 'adult', 'elder', 'unknown'], value=None, type='value', interactive=True, allow_custom_value=True)
-                                gr_sml_delete_btn = gr.Button('🗑 Удалить персонажа', elem_id='gr_sml_delete_btn')
-                            gr_sml_description = gr.Textbox(label='Описание персонажа', elem_id='gr_sml_description', interactive=False, lines=3)
-                            with gr.Row():
-                                gr_sml_voice_pick = gr.Dropdown(label='Голос', elem_id='gr_sml_voice_pick', choices=[], value=None, type='value', interactive=True, scale=4)
-                                gr_sml_preview_player = gr.Audio(elem_id='gr_sml_preview_player', type='filepath', autoplay=True, buttons=None, waveform_options=gr.WaveformOptions(show_recording_waveform=False), min_width=240, scale=1)
-                            gr_sml_preview = gr.Textbox(label='Предпросмотр', elem_id='gr_sml_preview', interactive=False, lines=10)
-                            with gr.Row():
-                                gr_sml_apply_btn = gr.Button('🎧 Озвучить', elem_id='gr_sml_apply_btn', variant='primary')
-                                gr_sml_stop_btn = gr.Button('⏹ Стоп', elem_id='gr_sml_stop_btn')
-                                gr_sml_cancel_btn = gr.Button('✖ Отмена', elem_id='gr_sml_cancel_btn')
 
                     with gr.Tab(legends['gr_tab_xtts_params'], elem_id='gr_tab_xtts_params', elem_classes='gr-tab', visible=False) as gr_tab_xtts_params:
                         with gr.Group(elem_id='gr_group_xtts_params', elem_classes=['gr-group']):
@@ -2477,6 +2493,55 @@ def build_interface(args:dict)->gr.Blocks:
                     session['output_split'] = val
                 return gr.update(visible=val)
 
+            def _click_gr_session_reset_btn(session_id:str)->dict:
+                """«Сброс сессии»: drop the loaded book, its outputs and the wizard.
+
+                The cleared session is handed back through ``gr_restore_session``,
+                so the standard restore chain — the same one a page load takes —
+                re-renders the whole interface from it (file slot, textarea,
+                player, lists and the wizard panel). Settings such as the engine,
+                the model, the voice and the language are kept; only the work is
+                dropped.
+                """
+                try:
+                    session = context.get_session(session_id)
+                    if session and session.get('id', False):
+                        if session.get('status') in (status_tags['CONVERTING'], status_tags['EDIT']):
+                            msg = 'Сессия не сброшена: дождитесь окончания озвучки или правки блоков.'
+                            show_alert(session_id, {'type': 'warning', 'msg': msg})
+                            return gr.update()
+                        reset_ebook_session(session_id, force=True, filter_keys=False)
+                        # the source as well: «сброс» means starting over, not
+                        # only dropping the finished audio
+                        for key, value in (
+                            ('ebook_src', None),
+                            ('ebook_list', None),
+                            ('ebook_selected', None),
+                            ('ebook_textarea', None),
+                            ('audiobook', None),
+                            # …and the wizard starts from scratch too
+                            ('sml_output_dir', None),
+                            ('sml_book_id', None),
+                            ('sml_characters', []),
+                            ('sml_removed', []),
+                            ('sml_selected', None),
+                            ('sml_text', None),
+                            ('sml_applied', False),
+                        ):
+                            try:
+                                session[key] = value
+                            except Exception as e:
+                                print(f'_click_gr_session_reset_btn(): {key} reset error: {e}')
+                        session['cancellation_requested'] = False
+                        session['status'] = status_tags['READY']
+                        show_alert(session_id, {'type': 'info', 'msg': 'Сессия сброшена'})
+                        data = {k: v for k, v in session.items() if k not in save_session_keys_except}
+                        return gr.update(value=json.dumps(data, cls=JSONDictProxyEncoder))
+                except Exception as e:
+                    error = f'_click_gr_session_reset_btn(): {e}'
+                    exception_alert(session_id, error)
+                return gr.update()
+
             def _click_gr_session_switch_btn(session_id:str, backup_session_id:str|None)->tuple:
                 try:
                     if backup_session_id is not None:
@@ -3107,21 +3172,21 @@ def build_interface(args:dict)->gr.Blocks:
                     session['voice_dir'] = os.path.join(voices_dir, '__sessions', f"voice-{session['id']}", session['language'])
                     os.makedirs(session['custom_model_dir'], exist_ok=True)
                     os.makedirs(session['voice_dir'], exist_ok=True)     
+                    msg = ''
                     if is_gui_shared:
                         msg = legends['msg_shared_access_limit'].format(days=interface_shared_tmp_expire)
                         session['audiobooks_dir'] = os.path.join(audiobooks_gradio_dir, f"web-{session['id']}")
                         delete_unused_tmp_dirs(session['id'], audiobooks_gradio_dir, interface_shared_tmp_expire)
                     else:
-                        msg = legends['msg_session_cleanup_notice'].format(days=tmp_expire)
                         session['audiobooks_dir'] = os.path.join(audiobooks_host_dir, f"web-{session['id']}")
                         delete_unused_tmp_dirs(session['id'], audiobooks_host_dir, tmp_expire)
-                    msg += legends['msg_cookies_required']
                     if not os.path.exists(session['audiobooks_dir']):
                         os.makedirs(session['audiobooks_dir'], exist_ok=True)
                     previous_hash = state['hash']
                     new_hash = hash_proxy_dict(MappingProxyType(session))
                     state['hash'] = new_hash
-                    show_alert(session['id'], {"type": "info", "msg": msg})
+                    if msg:
+                        show_alert(session['id'], {"type": "info", "msg": msg})
                     return gr.update(value=json.dumps(session, cls=JSONDictProxyEncoder)), gr.update(value=state), gr.update(value=session['id']), gr.update()
                 except Exception as e:
                     error = f'_change_gr_restore_session(): {e}'
@@ -3597,6 +3662,12 @@ def build_interface(args:dict)->gr.Blocks:
                 inputs=[gr_session, gr_output_split_hours],
                 outputs=None
             )
+            gr_session_reset_btn.click(
+                fn=_click_gr_session_reset_btn,
+                inputs=[gr_session],
+                outputs=[gr_restore_session],
+                show_progress_on=[gr_progress]
+            )
             gr_session_switch_btn.click(
                 fn=_click_gr_session_switch_btn,
                 inputs=[gr_session, gr_backup_session],
@@ -3947,6 +4018,7 @@ def build_interface(args:dict)->gr.Blocks:
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
                 blank = (gr.update(),) * 6
+                print('[sml] Нажата кнопка «Анализ книги»', flush=True)
                 try:
                     message = wizard.analyze(session, progress=progress_bar)
                 except wizard.WizardError as error:
@@ -3966,6 +4038,7 @@ def build_interface(args:dict)->gr.Blocks:
             def _click_gr_sml_build_btn(session_id):
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
+                print('[sml] Нажата кнопка «Собрать SML»', flush=True)
                 try:
                     _text, message = wizard.build(session, progress=progress_bar)
                 except wizard.WizardError as error:
@@ -3973,6 +4046,47 @@ def build_interface(args:dict)->gr.Blocks:
                 except Exception as error:
                     return f'Сборка SML не удалась: {error}', gr.update(), gr.update()
                 return message, wizard.rows(session), wizard.preview(session)
+
+            def _click_gr_sml_multi_voice(session_id, enabled):
+                """«Разные голоса»: off — one voice reads the whole book."""
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                built = bool(session.get('sml_text'))
+                if not wizard.set_multi_voices(session, enabled):
+                    return gr.update(), gr.update(), gr.update(), gr.update()
+                name = wizard.selected(session)
+                choices = _sml_voice_options(session)
+                tail = ' Соберите SML заново.' if built else ''
+                uncalled = not any(
+                    character.get('voice')
+                    for character in wizard.characters(session)
+                    if character.get('normalized_name') != wizard.pipeline.NARRATOR
+                )
+                if wizard.multi_voices(session):
+                    if uncalled and wizard.characters(session):
+                        message = (
+                            'Разные голоса включены, но голоса ещё не подобраны: '
+                            'нажмите «Анализ книги».'
+                        )
+                    else:
+                        message = 'Разные голоса включены: у каждого персонажа свой голос.' + tail
+                else:
+                    single = wizard.unified_voice(session)
+                    label = _sml_voice_label(session, single) if single else 'не выбран'
+                    message = (
+                        f'Единый голос для всех: {label}. Голоса персонажей сохранены, '
+                        'сменить его можно в строке рассказчика.' + tail
+                    )
+                return (
+                    message,
+                    wizard.rows(session),
+                    gr.update(
+                        value=wizard.effective_voice(session, name),
+                        choices=choices,
+                        interactive=wizard.voice_picker_enabled(session, name),
+                    ),
+                    wizard.preview(session),
+                )
 
             def _click_gr_sml_character_pick(session_id, name):
                 wizard = _sml_wizard()
@@ -3985,9 +4099,39 @@ def build_interface(args:dict)->gr.Blocks:
                         description = row[4] or ''
                         gender, age = row[1], row[2]
                         break
+                choices = _sml_voice_options(session)
                 return (
                     description,
-                    gr.update(value=wizard.voice_of(session, name)),
+                    gr.update(
+                        value=wizard.effective_voice(session, name),
+                        choices=choices,
+                        interactive=wizard.voice_picker_enabled(session, name),
+                    ),
+                    gr.update(value=gender),
+                    gr.update(value=age)
+                )
+
+            def _click_gr_sml_character_table(session_id, evt: gr.SelectData):
+                """Handle click on character table row - select that character."""
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                rows = wizard.rows(session)
+                if not rows or evt.index[0] >= len(rows):
+                    return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                row = rows[evt.index[0]]
+                name = row[0]
+                description = row[4] or ''
+                gender, age = row[1], row[2]
+                wizard.set_selected(session, name)
+                choices = _sml_voice_options(session)
+                return (
+                    gr.update(value=name),
+                    description,
+                    gr.update(
+                        value=wizard.effective_voice(session, name),
+                        choices=choices,
+                        interactive=wizard.voice_picker_enabled(session, name),
+                    ),
                     gr.update(value=gender),
                     gr.update(value=age)
                 )
@@ -4000,27 +4144,53 @@ def build_interface(args:dict)->gr.Blocks:
                 built = bool(session.get('sml_text'))
                 wizard.set_voice(session, name, voice)
                 tail = ' Соберите SML заново.' if built else ''
-                return wizard.rows(session), f'Голос для «{name}»: {_sml_voice_label(session, voice)}.{tail}', gr.update(value=voice)
+                # Check if voice is in current choices, if not pick first available
+                choices = _sml_voice_options(session)
+                choice_values = [path for _, path in choices]
+                if voice not in choice_values and choice_values:
+                    voice = choice_values[0]
+                    wizard.set_voice(session, name, voice)
+                return (
+                    wizard.rows(session),
+                    f'Голос для «{name}»: {_sml_voice_label(session, voice)}.{tail}',
+                    gr.update(
+                        value=wizard.effective_voice(session, name),
+                        choices=choices,
+                        interactive=wizard.voice_picker_enabled(session, name),
+                    ),
+                )
 
             def _click_gr_sml_gender_pick(session_id, name, gender):
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
                 if not name or not gender:
-                    return gr.update(), gr.update()
+                    return gr.update(), gr.update(), gr.update()
                 built = bool(session.get('sml_text'))
                 wizard.set_gender(session, name, gender)
+                wizard.reassign_voice_by_gender_age(session, name)
                 tail = ' Соберите SML заново.' if built else ''
-                return wizard.rows(session), f'Пол для «{name}»: {gender}.{tail}'
+                choices = _sml_voice_options(session)
+                return (
+                    wizard.rows(session),
+                    f'Пол для «{name}»: {gender}.{tail}',
+                    gr.update(value=wizard.effective_voice(session, name), choices=choices),
+                )
 
             def _click_gr_sml_age_pick(session_id, name, age):
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
                 if not name or not age:
-                    return gr.update(), gr.update()
+                    return gr.update(), gr.update(), gr.update()
                 built = bool(session.get('sml_text'))
                 wizard.set_age(session, name, age)
+                wizard.reassign_voice_by_gender_age(session, name)
                 tail = ' Соберите SML заново.' if built else ''
-                return wizard.rows(session), f'Возраст для «{name}»: {age}.{tail}'
+                choices = _sml_voice_options(session)
+                return (
+                    wizard.rows(session),
+                    f'Возраст для «{name}»: {age}.{tail}',
+                    gr.update(value=wizard.effective_voice(session, name), choices=choices),
+                )
 
             def _click_gr_sml_remove_btn(session_id, name):
                 wizard = _sml_wizard()
@@ -4048,7 +4218,7 @@ def build_interface(args:dict)->gr.Blocks:
                 print(f"[SML] sample text: {text[:100]!r}")
                 if not text:
                     return gr.update(), 'Нет реплики для прослушивания: сначала нажмите «Анализ книги».'
-                voice = wizard.voice_of(session, name)
+                voice = wizard.effective_voice(session, name)
                 print(f"[SML] voice path: {voice!r}")
                 preview_file = os.path.join(wizard.wizard_dir(session), f'__sml_preview.{default_audio_proc_format}')
                 if os.path.isfile(preview_file):
@@ -4092,6 +4262,19 @@ def build_interface(args:dict)->gr.Blocks:
                 text = wizard.apply(session)
                 return gr.update(value=text), gr.update(value=ebook_modes['TEXT']), 'SML-текст передан в озвучку.'
 
+            def _click_gr_sml_apply_5min_btn(session_id):
+                wizard = _sml_wizard()
+                session = context.get_session(session_id)
+                if not session.get('sml_text'):
+                    # Try to build first
+                    if not session.get('sml_characters'):
+                        return gr.update(), gr.update(), 'Сначала нажмите «Анализ книги» и «Собрать SML».'
+                    text, status = wizard.build_5min(session)
+                else:
+                    # Truncate existing SML
+                    text, status = wizard.build_5min(session)
+                return gr.update(value=text), gr.update(value=ebook_modes['TEXT']), status
+
             def _click_gr_sml_stop_btn(session_id):
                 session = context.get_session(session_id)
                 session['cancellation_requested'] = True
@@ -4113,15 +4296,21 @@ def build_interface(args:dict)->gr.Blocks:
                 wizard = _sml_wizard()
                 session = context.get_session(session_id)
                 state = wizard.state(session)
+                name = state['selected']
                 return (
                     state['status'],
                     state['rows'],
-                    gr.update(choices=state['names'], value=state['selected']),
-                    gr.update(choices=state['voices'], value=wizard.voice_of(session, state['selected'])),
+                    gr.update(choices=state['names'], value=name),
+                    gr.update(
+                        choices=state['voices'],
+                        value=wizard.effective_voice(session, name),
+                        interactive=wizard.voice_picker_enabled(session, name),
+                    ),
                     state['description'],
                     gr.update(value=state['gender']),
                     gr.update(value=state['age']),
-                    state['preview']
+                    state['preview'],
+                    gr.update(value=state['multi']),
                 )
 
             gr_sml_analyze_btn.click(
@@ -4136,10 +4325,22 @@ def build_interface(args:dict)->gr.Blocks:
                 outputs=[gr_sml_status, gr_sml_characters, gr_sml_preview],
                 show_progress_on=[gr_sml_status]
             )
+            # ``.input``, like the gender/age dropdowns: a programmatic re-render
+            # (the restore chain) must not toggle the mode behind the user's back
+            gr_sml_multi_voice.input(
+                fn=_click_gr_sml_multi_voice,
+                inputs=[gr_session, gr_sml_multi_voice],
+                outputs=[gr_sml_status, gr_sml_characters, gr_sml_voice_pick, gr_sml_preview]
+            )
             gr_sml_character_pick.change(
                 fn=_click_gr_sml_character_pick,
                 inputs=[gr_session, gr_sml_character_pick],
                 outputs=[gr_sml_description, gr_sml_voice_pick, gr_sml_gender, gr_sml_age]
+            )
+            gr_sml_characters.select(
+                fn=_click_gr_sml_character_table,
+                inputs=[gr_session],
+                outputs=[gr_sml_character_pick, gr_sml_description, gr_sml_voice_pick, gr_sml_gender, gr_sml_age]
             )
             gr_sml_voice_pick.change(
                 fn=_click_gr_sml_voice_pick,
@@ -4149,12 +4350,12 @@ def build_interface(args:dict)->gr.Blocks:
             gr_sml_gender.input(
                 fn=_click_gr_sml_gender_pick,
                 inputs=[gr_session, gr_sml_character_pick, gr_sml_gender],
-                outputs=[gr_sml_characters, gr_sml_status]
+                outputs=[gr_sml_characters, gr_sml_status, gr_sml_voice_pick]
             )
             gr_sml_age.input(
                 fn=_click_gr_sml_age_pick,
                 inputs=[gr_session, gr_sml_character_pick, gr_sml_age],
-                outputs=[gr_sml_characters, gr_sml_status]
+                outputs=[gr_sml_characters, gr_sml_status, gr_sml_voice_pick]
             )
             gr_sml_delete_btn.click(
                 fn=_click_gr_sml_remove_btn,
@@ -4171,6 +4372,18 @@ def build_interface(args:dict)->gr.Blocks:
                 _chain_check_override(
                     gr_sml_apply_btn.click(
                         fn=_click_gr_sml_apply_btn,
+                        inputs=[gr_session],
+                        outputs=[gr_ebook_textarea, gr_ebook_mode, gr_sml_status]
+                    )
+                ),
+                always=False
+            ).then(
+                js=f'()=>{{{js_hide_elements}}}'
+            )
+            _chain_enable(
+                _chain_check_override(
+                    gr_sml_apply_5min_btn.click(
+                        fn=_click_gr_sml_apply_5min_btn,
                         inputs=[gr_session],
                         outputs=[gr_ebook_textarea, gr_ebook_mode, gr_sml_status]
                     )
@@ -4389,7 +4602,7 @@ def build_interface(args:dict)->gr.Blocks:
             ).then(
                 fn=_restore_sml_wizard,
                 inputs=[gr_session],
-                outputs=[gr_sml_status, gr_sml_characters, gr_sml_character_pick, gr_sml_voice_pick, gr_sml_description, gr_sml_gender, gr_sml_age, gr_sml_preview]
+                outputs=[gr_sml_status, gr_sml_characters, gr_sml_character_pick, gr_sml_voice_pick, gr_sml_description, gr_sml_gender, gr_sml_age, gr_sml_preview, gr_sml_multi_voice]
             ).then(
                 fn=lambda session: _update_gr_glassmask(attr=['gr-glass-mask', 'hide']) if session else gr.update(),
                 inputs=[gr_session],

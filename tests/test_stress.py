@@ -12,13 +12,13 @@ def fake_accentor(text: str) -> str:
 
 class AccentTests(unittest.TestCase):
     def test_accent_marks_the_text(self):
-        self.assertEqual(stress.accent_text("замок", accentor=fake_accentor), "зам+ок")
+        self.assertEqual(stress.accent_text("замок", accentor=fake_accentor), f"зам{stress.STRESS_MARK}ок")
 
     def test_accent_keeps_the_tags_untouched(self):
         text = "[voice:/v/rus/adult/male/Пётр.wav]Замок был на двери.[/voice]"
         self.assertEqual(
             stress.accent_sml(text, accentor=fake_accentor),
-            "[voice:/v/rus/adult/male/Пётр.wav]Зам+ок был на двери.[/voice]",
+            f"[voice:/v/rus/adult/male/Пётр.wav]Зам{stress.STRESS_MARK}ок был на двери.[/voice]",
         )
 
     def test_voice_paths_are_never_sent_to_the_accentor(self):
@@ -77,7 +77,10 @@ class EngineRoutingTests(unittest.TestCase):
     def test_silero_is_accented(self):
         for engine in ("silero", "Silero", " SILERO "):
             self.assertTrue(stress.is_silero(engine))
-            self.assertEqual(stress.stress_for_engine("замок", engine, accentor=fake_accentor), "зам+ок")
+            self.assertEqual(
+                stress.stress_for_engine("замок", engine, accentor=fake_accentor),
+                f"зам{stress.STRESS_MARK}ок",
+            )
 
     def test_other_engines_are_stripped(self):
         for engine in ("xtts", "Qwen3-TTS", None, ""):

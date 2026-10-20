@@ -44,6 +44,7 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                 'voice_speakers': {},
                 'speaker_cursor': {gender: 0 for gender in self.speaker_pools}
             }
+            self._convert_parts = []
             # effective language for TTS (target when translating, else source)
             self.language = self.session.get('language')
             self.language_iso1 = self.session.get('language_iso1')
@@ -180,6 +181,46 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                 return False
         return False
 
+    @staticmethod
+    def _terminator_after(sentence:str, part:str)->bool:
+        """True when the next character of ``sentence`` after ``part`` is a terminator.
+
+        E2A's ``filter_blocks`` splits a block at the sentence-ending punctuation,
+        so the fragment a synthesizer receives is the text *before* the period and
+        carries no mark that a silence belongs here.  ``sentence`` is the untrimmed
+        text the fragment came from, which still holds it: the fragment is located
+        in it (from the start, then anywhere as a fallback for a re-accented copy)
+        and the character right after that occurrence decides.  A pause is due only
+        for a sentence end (``. ! ? …`` and the Russian ellipsis ``..``); a comma,
+        a colon or a dash must stay a short breath and never a full stop.
+        """
+        if not sentence or not part:
+            return False
+        start = sentence.find(part)
+        if start < 0:
+            start = sentence.find(part.strip())
+        if start < 0:
+            return False
+        after = sentence[start + len(part):].lstrip()
+        if not after:
+            return False
+        return after[0] in '.!?…' or after[:2] == '..'
+
+    def _raw_source(self, part:str)->str:
+        """The untrimmed fragment string ``part`` came from (see convert()).
+
+        ``_convert_parts`` holds the untrimmed fragments of the current sentence;
+        the lookup is done from the end because a re-accented copy is compared
+        against the text that produced it.
+        """
+        for value in reversed(self._convert_parts):
+            if '[/voice]' in value or '[voice:' in value:
+                continue
+            stripped = value.strip()
+            if stripped == part or stripped.lstrip('+') == part:
+                return value
+        return part
+
     def _load_accentor(self)->Any:
         # silero-stress is pure torch, but it is still an extra package: a missing
         # or broken install loses the accent marks and must not fail the sentence,
@@ -194,6 +235,13 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
         return self.accentor or None
 
     def _accent(self, text:str)->str:
+        # a document written by the earlier variant of the stress helpers may
+        # still carry U+00B4 (´); the checkpoint only understands the '+' it
+        # was trained with, so that leftover mark is translated first —
+        # independently of the preset's stress flag, which only controls the
+        # accentor below.
+        if '\u00b4' in text:
+            text = text.replace('\u00b4', '+')
         # accents the fragment ('замок' -> 'зам+ок') so that the checkpoint's
         # generator pronounces it as silero-stress decided; SML tags are never
         # passed here, only the plain text between them.
@@ -216,6 +264,7 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
             from lib.classes.tts_engines.common.audio import trim_audio, is_audio_data_valid
             if self.engine:
                 sentence_parts = self._split_sentence_on_sml(sentence)
+                self._convert_parts = sentence_parts
                 self.params['block_voice'] = kwargs.get('block_voice', self.session['voice'])
                 if self.params.get('inline_voice'):
                     self.params['current_voice'] = self.params['inline_voice']
@@ -246,6 +295,12 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                         if part.endswith("'"):
                             part = part[:-1]
                         part = self._accent(part)
+                        # the terminator the punctuation was split off from: E2A's
+                        # filter_blocks cuts a sentence at its period/comma and hands
+                        # each fragment over as its own string, so a fragment almost
+                        # never ends on one.  ``sentence`` keeps the untrimmed form this
+                        # fragment came from, which recovers it (see _terminator_after).
+                        raw_part = self._raw_source(part)
                         part_sr = self.params['samplerate']
                         try:
                             with torch.inference_mode():
@@ -279,7 +334,7 @@ class Silero(TTSUtils, TTSRegistry, name='silero'):
                                 # the switches sound like long gaps.
                                 if not self._silence_follows(sentence_parts, index) and (
                                     index == last_audible
-                                    or (not re.search(r'\w$', part, flags=re.UNICODE) and part[-1] != '—')
+                                    or self._terminator_after(sentence, raw_part)
                                 ):
                                     silence_time = int(np.random.uniform(0.3, 0.6) * 100) / 100
                                     self.audio_segments.append(torch.zeros(1, int(self.params['samplerate'] * silence_time)))

@@ -19,6 +19,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import character_profile, emotion, sml_generator, stress, voice_matcher
+from . import traced
 from .core import (
     convert_ebook_to_txt,
     extract_characters,
@@ -60,6 +61,12 @@ def _progress_shim(progress):
     return report
 
 
+@traced(
+    "Разбор книги (BookNLP)",
+    describe=lambda result: (
+        f"книга {result['book_id']}, персонажей {len(result['characters'])}"
+    ),
+)
 def analyze_book(
     book_file,
     output_dir,
@@ -107,6 +114,10 @@ def analyze_book(
     }
 
 
+@traced(
+    "Загрузка разобранной книги",
+    describe=lambda result: f"книга {result['book_id']}, персонажей {len(result['characters'])}",
+)
 def load_book(output_dir, book_id, language="rus") -> dict:
     """Reload an already analyzed book (a session keeps only the paths)."""
     output_dir = str(Path(output_dir).expanduser().resolve())
@@ -119,6 +130,10 @@ def load_book(output_dir, book_id, language="rus") -> dict:
     }
 
 
+@traced(
+    "Описания персонажей",
+    describe=lambda result: f"описаний {len(result)}",
+)
 def describe_characters(
     characters,
     booknlp_data=None,
@@ -141,6 +156,12 @@ def describe_characters(
     )
 
 
+@traced(
+    "Подбор голосов",
+    describe=lambda result: (
+        f"ролей {len(result)}, с голосом {sum(1 for c in result if c.get('voice'))}"
+    ),
+)
 def cast_characters(
     booknlp_data,
     characters,
@@ -236,6 +257,10 @@ def cast_characters(
     return speaking
 
 
+@traced(
+    "Строки таблицы персонажей",
+    describe=lambda result: f"строк {len(result)}",
+)
 def character_rows(booknlp_data, characters, voices=None) -> list[dict]:
     """The data behind the wizard's character table, narrator first.
 
@@ -404,6 +429,8 @@ def preview_lines(
 
     One line per character — its voice, its description, a sample of its own
     speech — followed by the opening of the book as it will be read.
+    ``voices`` overrides the cast (the wizard passes the single voice of the
+    «Разные голоса»-off mode, so the preview shows what will really be heard).
     """
     segments = sml_generator.book_segments(booknlp_data or {})
     samples: dict = {}
@@ -415,7 +442,7 @@ def preview_lines(
             bucket.append(text.strip())
 
     lines = []
-    for row in character_rows(booknlp_data, characters):
+    for row in character_rows(booknlp_data, characters, voices=voices):
         lines.append(
             f"{row['name']} — {row['voice_name'] or 'без голоса'} — {row['description']}"
         )
@@ -432,6 +459,7 @@ def preview_lines(
     return lines
 
 
+@traced("Сборка SML", describe=lambda result: f"символов {len(result)}")
 def build_sml(
     booknlp_data,
     characters,

@@ -31,7 +31,7 @@ models = {
         "voice": default_engine_settings[TTS_ENGINES['SILERO']]['voice'],
         "files": [],
         "samplerate": default_engine_settings[TTS_ENGINES['SILERO']]['samplerate'],
-        "stress": True
+        "stress": False
     },
     "v5_6_ru": {
         "lang": "rus",
@@ -40,7 +40,7 @@ models = {
         "voice": default_engine_settings[TTS_ENGINES['SILERO']]['voice'],
         "files": [],
         "samplerate": default_engine_settings[TTS_ENGINES['SILERO']]['samplerate'],
-        "stress": True
+        "stress": False
     },
     "v5_5_ru": {
         "lang": "rus",
@@ -49,7 +49,7 @@ models = {
         "voice": default_engine_settings[TTS_ENGINES['SILERO']]['voice'],
         "files": [],
         "samplerate": default_engine_settings[TTS_ENGINES['SILERO']]['samplerate'],
-        "stress": True
+        "stress": False
     },
     "v4_ru": {
         "lang": "rus",
@@ -58,6 +58,6 @@ models = {
         "voice": default_engine_settings[TTS_ENGINES['SILERO']]['voice'],
         "files": [],
         "samplerate": default_engine_settings[TTS_ENGINES['SILERO']]['samplerate'],
-        "stress": True
+        "stress": False
     }
 }

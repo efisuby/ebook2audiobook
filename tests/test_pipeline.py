@@ -230,7 +230,7 @@ class StressPreviewTests(unittest.TestCase):
             preview = pipeline.stress_preview(
                 make_book(), characters, tts_engine="silero"
             )
-        self.assertIn("Прив+ет", preview)
+        self.assertIn(f"Прив{pipeline.stress.STRESS_MARK}ет", preview)
         self.assertIn("[voice:/voices/rus/adult/male/Petr.wav]", preview)
 
     def test_other_engines_get_the_text_without_marks(self):
@@ -306,7 +306,7 @@ class BuildSmlTests(unittest.TestCase):
                 tts_engine="xtts",
                 use_emotions=False,
             )
-        self.assertIn("Прив+ет", silero)
+        self.assertIn(f"Прив{pipeline.stress.STRESS_MARK}ет", silero)
         self.assertNotIn("+", xtts)
         self.assertIn("Привет", xtts)
 

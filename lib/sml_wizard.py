@@ -18,7 +18,14 @@ import wave
 from collections import OrderedDict
 
 from sml_extractor import pipeline, sml_generator
-from sml_extractor.voice_matcher import scan_voice_library
+from sml_extractor import log as _log
+from sml_extractor.voice_matcher import (
+    scan_voice_library,
+    auto_assign_voices,
+    _find_best_voice,
+    GENDERS,
+    AGE_CATEGORIES,
+)
 
 # ISO-639-3 codes BookNLP ships models for (see sml_extractor.core).
 BOOKNLP_LANGUAGES = ("eng", "rus")
@@ -86,6 +93,71 @@ def voices(session) -> dict:
     }
 
 
+# ── one voice for everyone (the «Разные голоса» switch) ───────────────────────
+
+def multi_voices(session) -> bool:
+    """Whether every character keeps the voice it was given (the default).
+
+    The switch never touches the cast: turning it back on brings every voice
+    back exactly as it was, so the per-character work is always kept.
+    """
+    value = session.get("sml_multi_voices")
+    return True if value is None else bool(value)
+
+
+def set_multi_voices(session, value) -> bool:
+    """Store the switch.  A real change invalidates a built document."""
+    value = bool(value)
+    if multi_voices(session) == value:
+        return False
+    session["sml_multi_voices"] = value
+    _invalidate(session)
+    return True
+
+
+def unified_voice(session) -> str | None:
+    """The one voice the whole book is read with while the switch is off.
+
+    The narrator reads most of the book, so its voice is the natural single
+    one; a cast without a narrator falls back to the first voice there is.
+    """
+    chosen = dict(voices(session))
+    single = chosen.get(pipeline.NARRATOR)
+    if single:
+        return single
+    for path in chosen.values():
+        if path:
+            return path
+    return None
+
+
+def effective_voice(session, name: str) -> str | None:
+    """The voice ``name`` is really read with — what the picker must show."""
+    if multi_voices(session):
+        return voice_of(session, name)
+    return unified_voice(session) or voice_of(session, name)
+
+
+def effective_voices(session) -> dict:
+    """``{name: path}`` as the document will use it: one voice for all if off."""
+    chosen = dict(voices(session))
+    if multi_voices(session):
+        return chosen
+    single = unified_voice(session)
+    if not single:
+        return chosen
+    return {name: single for name in chosen}
+
+
+def voice_picker_enabled(session, name) -> bool:
+    """Whether the voice dropdown may be edited for ``name``.
+
+    With one voice for everyone only the narrator's row changes it — that is
+    where the single voice is picked; every other row would be ignored anyway.
+    """
+    return multi_voices(session) or not name or name == pipeline.NARRATOR
+
+
 def book_file(session) -> str | None:
     """The file (or a dump of the textarea) the analysis should read."""
     text = (session.get("ebook_textarea") or "").strip()
@@ -146,7 +218,11 @@ def book_data(session) -> dict | None:
     # ``load_book`` wraps the tables; the cache (and every caller) wants the
     # tables themselves plus the two paths, exactly like ``analyze`` stores.
     booknlp_data = loaded.get("booknlp_data") if isinstance(loaded, dict) else None
-    if not booknlp_data or not booknlp_data.get("book_txt"):
+    # _book_segments needs either (tokens and quotes) OR book_txt.
+    # Russian BookNLP doesn't generate .book.txt, so accept token/quote data.
+    has_token_quote = booknlp_data.get("tokens") and booknlp_data.get("quotes") is not None
+    has_book_txt = booknlp_data.get("book_txt")
+    if not booknlp_data or not (has_token_quote or has_book_txt):
         return None
     data = {**booknlp_data, "output_dir": output_dir, "book_id": book_id}
     _remember(data)
@@ -176,11 +252,19 @@ def analyze(session, model: str = "small", use_llm: bool = True, progress=None,
     if not book:
         raise WizardError("Сначала выберите книгу (или вставьте текст) — анализировать нечего.")
     digest = _source_digest(book)
+    cast_ready = any(
+        character.get("voice")
+        for character in characters(session)
+        if character.get("normalized_name") != pipeline.NARRATOR
+    )
     if (
         not force
         and session.get("sml_characters")
         and book_data(session)
         and _digests.get(session.get("sml_output_dir")) == digest
+        # a book analysed for one voice carries no cast: switching «Разные
+        # голоса» back on must really run the casting, not report it as done
+        and (not multi_voices(session) or cast_ready)
     ):
         found = characters(session)
         narrated = sum(
@@ -198,16 +282,43 @@ def analyze(session, model: str = "small", use_llm: bool = True, progress=None,
         )
 
     output_dir = wizard_dir(session)
-    result = pipeline.analyze_book(
-        book, output_dir, language=book_language, model=model, progress=progress
+    reuse = (
+        not force
+        and session.get("sml_characters")
+        and book_data(session)
+        and _digests.get(session.get("sml_output_dir")) == digest
     )
-    booknlp_data = result["booknlp_data"]
-    found = list(result["characters"])
-    pipeline.cast_characters(booknlp_data, found, language=book_language)
-    pipeline.describe_characters(
-        found, booknlp_data, language=book_language, use_llm=use_llm,
-        progress=_scaled(progress, 0.8, 1.0),
-    )
+    if reuse:
+        # BookNLP already ran for this exact source: reload its output instead of
+        # re-running the model.  This is what makes flipping «Разные голоса» back
+        # on cheap — only the casting and the descriptions are redone.
+        prepared = pipeline.load_book(
+            session["sml_output_dir"], session["sml_book_id"], language=book_language
+        )
+        booknlp_data = prepared["booknlp_data"]
+        book_id = prepared["book_id"]
+        found = list(characters(session))
+    else:
+        result = pipeline.analyze_book(
+            book, output_dir, language=book_language, model=model, progress=progress
+        )
+        booknlp_data = result["booknlp_data"]
+        book_id = result["book_id"]
+        found = list(result["characters"])
+
+    # With «Разные голоса» off the whole book is read by one voice, so the cast
+    # is never used: skip the slow LLM descriptions and the voice casting.  The
+    # BookNLP analysis above still runs — it is what splits narration from
+    # dialogue, which the emotion labels need.
+    single_voice = not multi_voices(session)
+    if single_voice:
+        _log("Режим одного голоса: описания персонажей и подбор голосов пропущены")
+    else:
+        pipeline.cast_characters(booknlp_data, found, language=book_language)
+        pipeline.describe_characters(
+            found, booknlp_data, language=book_language, use_llm=use_llm,
+            progress=_scaled(progress, 0.8, 1.0),
+        )
 
     # compute and store lines count for each character so it survives session restore
     lines = {}
@@ -220,17 +331,21 @@ def analyze(session, model: str = "small", use_llm: bool = True, progress=None,
 
     forget_book(session)
     session["sml_output_dir"] = output_dir
-    session["sml_book_id"] = result["book_id"]
+    session["sml_book_id"] = book_id
     session["sml_characters"] = _plain(found)
     session["sml_text"] = None
     session["sml_applied"] = False
     session["sml_removed"] = []
     session["sml_selected"] = None
-    _remember({**booknlp_data, "output_dir": output_dir, "book_id": result["book_id"]})
+    _remember({**booknlp_data, "output_dir": output_dir, "book_id": book_id})
     _digests[output_dir] = digest
     save(session)
 
     narrated = sum(1 for character in found if character.get("description_source") == "llm")
+    _log(
+        f"Анализ книги завершён: персонажей {len(found)}, "
+        f"описаний от модели {narrated}, книга {os.path.basename(book)}"
+    )
     return (
         f"Готово: персонажей {len(found)}, из них с описанием от модели {narrated}. "
         f"Книга: {os.path.basename(book)}."
@@ -246,7 +361,7 @@ def rows(session) -> list:
     if data is not None:
         return [
             [row["name"], row["gender"], row["age"], row["lines"], row["description"], row["voice_name"]]
-            for row in pipeline.character_rows(data, found)
+            for row in pipeline.character_rows(data, found, voices=effective_voices(session))
         ]
     # the tables are gone (forgotten session): show what the session kept
     # count quotes from the session characters
@@ -262,7 +377,7 @@ def rows(session) -> list:
             character.get("inferred_age_category", ""),
             str(quote_counts.get(character.get("normalized_name", ""), "")),
             character.get("description", ""),
-            _stem(character.get("voice")),
+            _stem(effective_voice(session, character.get("normalized_name"))),
         ]
         for character in sorted(found, key=lambda item: item.get("normalized_name") != pipeline.NARRATOR)
     ]
@@ -276,13 +391,12 @@ def names(session) -> list:
 def voice_choices(session) -> list:
     """``[(label, absolute path)]`` of every voice of the book language.
 
-    For Silero the checkpoint's own speakers come first, each tagged
-    ``[silero]`` in the label, so they are easy to spot next to the library.
+    For Silero only the checkpoint's own speakers are shown.
+    For other engines the voice library is used.
     """
-    choices = _library_choices(session)
     if engine(session) == SILERO_ENGINE:
-        choices = silero_choices(session) + choices
-    return choices
+        return silero_choices(session)
+    return _library_choices(session)
 
 
 def _library_choices(session) -> list:
@@ -384,6 +498,7 @@ def remove_character(session, name: str) -> bool:
     if session.get("sml_selected") == name:
         session["sml_selected"] = None
     _invalidate(session)
+    _log(f"Персонаж удалён из чтения: {name} (его строки читает рассказчик)")
     return True
 
 
@@ -422,6 +537,8 @@ def _set_field(session, name: str, field: str, value) -> bool:
         return False
     session["sml_characters"] = found
     _invalidate(session)
+    field_name = "пол" if field == "inferred_gender" else "возраст"
+    _log(f"У «{name}» изменён {field_name}: {value or 'не задан'}")
     return True
 
 
@@ -448,13 +565,67 @@ def set_voice(session, name: str, voice: str | None) -> bool:
     (with the same unchanged-value guard as the gender/age fields, because a
     re-render feeds the stored value back through the picker).
     """
-    for character in characters(session):
+    chars = list(session.get("sml_characters") or [])
+    for character in chars:
         if character.get("normalized_name") == name:
             if (character.get("voice") or None) == (voice or None):
                 return True
             character["voice"] = voice or None
+            session["sml_characters"] = chars  # re-assign to trigger proxy change detection
             _invalidate(session)
+            _log(f"Голос для «{name}» изменён: {_stem(voice) or 'не задан'}")
             return True
+    return False
+
+
+def reassign_voice_by_gender_age(session, name: str) -> bool:
+    """Re-assign a voice for a character based on their gender and age.
+
+    Used when gender or age is changed manually. Picks the best available
+    voice from the library (or Silero speakers for Silero engine).
+    """
+    chars = list(session.get("sml_characters") or [])
+    for character in chars:
+        if character.get("normalized_name") == name:
+            gender = character.get("inferred_gender", "unknown")
+            age = character.get("inferred_age_category", "adult")
+            if gender not in GENDERS:
+                gender = "female"
+            if age not in AGE_CATEGORIES:
+                age = "adult"
+
+            root = pipeline.APP_ROOT
+            language_code = language(session)
+
+            if engine(session) == SILERO_ENGINE:
+                # For Silero, pick from built-in speakers matching gender
+                for _gender, speakers in SILERO_SPEAKERS:
+                    if _gender == gender:
+                        for speaker in speakers:
+                            path = _silero_voice_file(session, _gender, speaker)
+                            if os.path.isfile(path):
+                                character["voice"] = path
+                                session["sml_characters"] = chars
+                                _invalidate(session)
+                                _log(
+                                    f"Голос для «{name}» подобран по полу и возрасту: "
+                                    f"{speaker} ({gender}, {age})"
+                                )
+                                return True
+            else:
+                # For other engines, use the voice library
+                library = scan_voice_library(str(root), language_code)
+                used = {c.get("voice") for c in chars if c.get("voice")}
+                voice = _find_best_voice(gender, age, library, used)
+                if voice:
+                    character["voice"] = voice
+                    session["sml_characters"] = chars
+                    _invalidate(session)
+                    _log(
+                        f"Голос для «{name}» подобран по полу и возрасту: "
+                        f"{_stem(voice)} ({gender}, {age})"
+                    )
+                    return True
     return False
 
 
@@ -488,7 +659,8 @@ def preview(session, per_character: int = 1, opening: int = 6, sml_lines: int = 
     if data is None or not found:
         return "Пока нечего показывать: нажмите «Анализ книги»."
     lines = pipeline.preview_lines(
-        data, found, voices=voices(session), per_character=per_character, opening=opening
+        data, found, voices=effective_voices(session),
+        per_character=per_character, opening=opening
     )
     text = "\n".join(lines)
     sml = session.get("sml_text")
@@ -515,21 +687,54 @@ def build(session, use_emotions: bool = True, use_stress: bool = True, progress=
         progress=progress,
     )
     session["sml_text"] = text
+    session["sml_use_stress"] = bool(use_stress)
     session["sml_applied"] = False
     blocks = pipeline.sml_blocks(text)
     spoken = sum(1 for block in blocks if block.startswith("[voice:"))
-    return text, f"SML готов: блоков {len(blocks)}, из них с голосом {spoken}."
+    _log(f"SML собран: блоков {len(blocks)}, с голосом {spoken}")
+    status = f"SML готов: блоков {len(blocks)}, из них с голосом {spoken}."
+    if not multi_voices(session):
+        status += f" Один голос для всех: {_stem(unified_voice(session)) or 'не выбран'}."
+    return text, status
+
+
+def build_5min(session, use_emotions: bool = True, use_stress: bool = True, progress=None) -> tuple[str, str]:
+    """Render the SML document truncated to approximately 5 minutes of audio.
+
+    Roughly 5 minutes of Russian speech at normal speed = ~5000-7000 characters.
+    We truncate at block boundaries to keep SML valid.
+    """
+    full_text, status = build(session, use_emotions, use_stress, progress)
+    # Target ~6000 characters for ~5 minutes of Russian speech
+    target_chars = 6000
+    if len(full_text) <= target_chars:
+        return full_text, status + " (коротче 5 минут)"
+    blocks = pipeline.sml_blocks(full_text)
+    truncated = []
+    char_count = 0
+    for block in blocks:
+        if char_count + len(block) > target_chars and truncated:
+            break
+        truncated.append(block)
+        char_count += len(block)
+    truncated_text = "\n".join(truncated)
+    session["sml_text"] = truncated_text
+    session["sml_applied"] = False
+    _log(f"SML обрезан до 5 минут: блоков {len(truncated)}, символов {len(truncated_text)}")
+    return truncated_text, f"{status} → обрезано до ~5 минут ({len(truncated_text)} симв.)"
 
 
 def _voice_map(session) -> dict:
-    """``{name: path}`` for the document, with the two edits applied.
+    """``{name: path}`` for the document, with the three edits applied.
 
+    With «Разные голоса» off every character collapses onto the single voice
+    (:func:`effective_voices`), so the whole book is read by one voice.
     A deleted name is mapped to the narrator's voice, so its lines are read by
     the narrator instead of the block voice.  The built-in speaker placeholders
     of Silero are dropped for every other engine: a placeholder is silence, and
     a cloning engine would happily clone it.
     """
-    chosen = dict(voices(session))
+    chosen = dict(effective_voices(session))
     narrator_voice = chosen.get(pipeline.NARRATOR)
     for name in removed(session):
         if narrator_voice:
@@ -553,12 +758,14 @@ def apply(session) -> str:
     # keep it for the session persistence: a reload restores the textarea with
     # the document already in it, so the user stays on the "ready to voice" step
     session["ebook_textarea"] = text
+    _log(f"SML передан в озвучку: блоков {len(pipeline.sml_blocks(text))}")
     return text
 
 
 def cancel(session) -> None:
     """The user went back to the voice list: forget the document as applied."""
     session["sml_applied"] = False
+    _log("SML отменён: возврат к выбору голосов")
 
 
 # ── persistence ───────────────────────────────────────────────────────────────
@@ -575,10 +782,13 @@ def save(session) -> None:
         "characters": characters(session),
         "removed": removed(session),
         "selected": selected(session),
+        "multi_voices": multi_voices(session),
         "source": _digests.get(output_dir),
     }
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=1)
+    _log(f"Состояние визарда сохранено: персонажей {len(payload['characters'])}")
+    _log(f"Состояние визарда сохранено: персонажей {len(payload['characters'])}")
 
 
 def restore(session) -> bool:
@@ -598,8 +808,13 @@ def restore(session) -> bool:
     session["sml_characters"] = payload.get("characters") or []
     session["sml_removed"] = payload.get("removed") or []
     session["sml_selected"] = payload.get("selected")
+    if "multi_voices" in payload:
+        session["sml_multi_voices"] = bool(payload["multi_voices"])
     if payload.get("source"):
         _digests[session["sml_output_dir"]] = payload["source"]
+    _log(
+        f"Состояние визарда восстановлено: персонажей {len(session['sml_characters'])}"
+    )
     return bool(session["sml_book_id"])
 
 
@@ -623,6 +838,7 @@ def state(session) -> dict:
             "description": "",
             "gender": None,
             "age": None,
+            "multi": multi_voices(session),
             "preview": preview(session),
         }
     name = selected(session)
@@ -652,6 +868,7 @@ def state(session) -> dict:
         "description": description or "",
         "gender": gender,
         "age": age,
+        "multi": multi_voices(session),
         "preview": preview(session),
     }
 

@@ -51,3 +51,9 @@ torchvggish
 pyannote-audio
 demucs-simple
 huggingface-hub
+qwen-tts
+accelerate
+librosa
+einops
+sox
+silero-stress

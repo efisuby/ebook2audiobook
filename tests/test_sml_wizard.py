@@ -299,15 +299,17 @@ class VoiceTests(WizardTestCase):
     def test_the_library_is_offered_by_language(self):
         session = make_session(self.root)
         with mock.patch.object(wizard.pipeline, "APP_ROOT", Path(self.root)):
+            library = wizard._library_choices(session)
+            silero = wizard.silero_choices(session)
             choices = wizard.voice_choices(session)
-        library = [pair for pair in choices if wizard.SILERO_TAG not in pair[0]]
-        paths = sorted(path for _label, path in choices)
-        self.assertEqual(len(choices), 3 + 5)  # library + the five built-ins
+        paths = sorted(path for _label, path in library)
+        self.assertEqual(len(library), 3)
+        self.assertEqual(len(silero), 5)
         self.assertTrue(any(path.endswith("Petr.wav") for path in paths))
-        self.assertTrue(all(os.path.isabs(path) for path in paths))
-        self.assertTrue(all(_label.startswith(wizard.SILERO_TAG) for _label, _p in wizard.silero_choices(session)))
-        self.assertEqual(len(wizard._library_choices(session)), 3)
-        self.assertEqual(len(wizard.silero_choices(session)), 5)
+        self.assertTrue(all(os.path.isabs(path) for _label, path in library + silero))
+        self.assertTrue(all(_label.startswith(wizard.SILERO_TAG) for _label, _p in silero))
+        # the default engine is silero: only its own speakers are offered
+        self.assertEqual(choices, silero)
 
     def test_the_built_in_speakers_are_offered_for_silero_only(self):
         session = make_session(self.root, tts_engine="xtts")
@@ -426,7 +428,7 @@ class BuildTests(WizardTestCase):
             silero, _ = wizard.build(session, use_emotions=False, use_stress=True)
             session["tts_engine"] = "xtts"
             plain, _ = wizard.build(session, use_emotions=False, use_stress=True)
-        self.assertIn("Прив+ет", silero)
+        self.assertIn(f"Прив{wizard.pipeline.stress.STRESS_MARK}ет", silero)
         self.assertNotIn("+", plain)
         self.assertIn("Привет", plain)
 
@@ -642,6 +644,172 @@ class RoundTwoTests(WizardTestCase):
         self.assertEqual(state["age"], "adult")
         self.assertIn("Пётр", state["description"])
         self.assertTrue(state["voices"])
+
+
+class MultiVoiceTests(WizardTestCase):
+    """The «Разные голоса» switch: on — the cast as it is, off — one voice."""
+
+    def _analyzed(self):
+        session = make_session(self.root)
+        with mock.patch.object(wizard.pipeline, "analyze_book", fake_analyze_book), \
+             mock.patch.object(wizard.pipeline, "cast_characters", fake_cast), \
+             mock.patch.object(wizard.pipeline, "describe_characters", fake_describe):
+            wizard.analyze(session)
+        # a distinct voice per character, so the two modes are tellable
+        for character in session["sml_characters"]:
+            character["voice"] = f"/v/{character['normalized_name']}.wav"
+        return session
+
+    def test_a_session_without_the_key_keeps_the_voices(self):
+        self.assertTrue(wizard.multi_voices(make_session(self.root)))
+        self.assertTrue(wizard.multi_voices({"sml_multi_voices": True}))
+        self.assertFalse(wizard.multi_voices({"sml_multi_voices": False}))
+
+    def test_the_cast_survives_switching_to_one_voice(self):
+        session = self._analyzed()
+        self.assertTrue(wizard.set_multi_voices(session, False))
+        self.assertFalse(wizard.multi_voices(session))
+        self.assertEqual(wizard.voice_of(session, "Пётр"), "/v/Пётр.wav")
+        self.assertEqual(wizard.voice_of(session, "Narrator"), "/v/Narrator.wav")
+
+    def test_the_same_value_is_a_noop_and_keeps_a_built_document(self):
+        session = self._analyzed()
+        text, _status = wizard.build(session, use_emotions=False, use_stress=False)
+        self.assertFalse(wizard.set_multi_voices(session, True))
+        self.assertEqual(session["sml_text"], text)
+
+    def test_switching_to_one_voice_drops_a_built_document(self):
+        session = self._analyzed()
+        wizard.build(session, use_emotions=False, use_stress=False)
+        self.assertTrue(wizard.set_multi_voices(session, False))
+        self.assertIsNone(session["sml_text"])
+        self.assertFalse(session["sml_applied"])
+
+    def test_the_narrator_voice_is_the_single_one(self):
+        session = self._analyzed()
+        self.assertEqual(wizard.unified_voice(session), "/v/Narrator.wav")
+        self.assertEqual(wizard.effective_voice(session, "Пётр"), "/v/Пётр.wav")
+        wizard.set_multi_voices(session, False)
+        self.assertEqual(wizard.effective_voice(session, "Пётр"), "/v/Narrator.wav")
+        self.assertEqual(wizard.effective_voice(session, "Narrator"), "/v/Narrator.wav")
+        self.assertEqual(
+            wizard.effective_voices(session),
+            {"Narrator": "/v/Narrator.wav", "Пётр": "/v/Narrator.wav", "Мария": "/v/Narrator.wav"},
+        )
+
+    def test_a_cast_without_a_narrator_falls_back_to_the_first_voice(self):
+        session = make_session(
+            self.root,
+            sml_characters=[
+                {"normalized_name": "Пётр", "voice": "/v/Petr.wav"},
+                {"normalized_name": "Мария", "voice": "/v/Masha.wav"},
+            ],
+        )
+        self.assertEqual(wizard.unified_voice(session), "/v/Petr.wav")
+
+    def test_a_cast_without_any_voice_has_no_single_one(self):
+        session = make_session(self.root, sml_characters=[{"normalized_name": "Пётр"}])
+        self.assertIsNone(wizard.unified_voice(session))
+        self.assertEqual(wizard.effective_voices(session), {})
+
+    def test_every_block_gets_the_single_voice(self):
+        session = self._analyzed()
+        wizard.set_multi_voices(session, False)
+        text, status = wizard.build(session, use_emotions=False, use_stress=False)
+        self.assertIn("/v/Narrator.wav", text)
+        self.assertNotIn("/v/Пётр.wav", text)
+        self.assertNotIn("/v/Мария.wav", text)
+        self.assertIn("Один голос для всех: Narrator", status)
+
+    def test_the_table_shows_the_voice_that_will_be_used(self):
+        session = self._analyzed()
+        wizard.set_multi_voices(session, False)
+        self.assertEqual({row[5] for row in wizard.rows(session)}, {"Narrator"})
+        wizard.set_multi_voices(session, True)
+        self.assertEqual(
+            {row[0]: row[5] for row in wizard.rows(session)},
+            {"Narrator": "Narrator", "Пётр": "Пётр", "Мария": "Мария"},
+        )
+
+    def test_only_the_narrator_may_be_given_the_single_voice(self):
+        session = self._analyzed()
+        self.assertTrue(wizard.voice_picker_enabled(session, "Пётр"))
+        wizard.set_multi_voices(session, False)
+        self.assertTrue(wizard.voice_picker_enabled(session, "Narrator"))
+        self.assertFalse(wizard.voice_picker_enabled(session, "Пётр"))
+        # nothing selected — there is nothing to protect yet
+        self.assertTrue(wizard.voice_picker_enabled(session, None))
+        wizard.set_multi_voices(session, True)
+        self.assertTrue(wizard.voice_picker_enabled(session, "Пётр"))
+
+    def test_state_renders_the_switch(self):
+        session = self._analyzed()
+        wizard.set_multi_voices(session, False)
+        self.assertFalse(wizard.state(session)["multi"])
+        self.assertFalse(wizard.state(make_session(self.root))["multi"])
+        wizard.set_multi_voices(session, True)
+        self.assertTrue(wizard.state(session)["multi"])
+
+    def test_the_switch_survives_a_restore(self):
+        session = self._analyzed()
+        wizard.set_multi_voices(session, False)
+        wizard.save(session)
+        fresh = make_session(self.root)
+        self.assertTrue(wizard.restore(fresh))
+        self.assertFalse(wizard.multi_voices(fresh))
+
+
+class SingleVoiceAnalysisTests(WizardTestCase):
+    """«Разные голоса» off: skip the slow casting and descriptions."""
+
+    def test_one_voice_skips_descriptions_and_casting(self):
+        session = make_session(self.root, sml_multi_voices=False)
+        with mock.patch.object(wizard.pipeline, "analyze_book", fake_analyze_book), \
+             mock.patch.object(wizard.pipeline, "cast_characters") as cast, \
+             mock.patch.object(wizard.pipeline, "describe_characters") as describe:
+            wizard.analyze(session)
+        cast.assert_not_called()
+        describe.assert_not_called()
+        # the BookNLP characters are still there — the table and the emotions
+        # need them
+        self.assertTrue(session["sml_characters"])
+        self.assertTrue(
+            any(c["normalized_name"] == "Пётр" for c in session["sml_characters"])
+        )
+
+    def test_one_voice_leaves_the_characters_without_a_voice(self):
+        session = make_session(self.root, sml_multi_voices=False)
+        with mock.patch.object(wizard.pipeline, "analyze_book", fake_analyze_book), \
+             mock.patch.object(wizard.pipeline, "cast_characters") as cast, \
+             mock.patch.object(wizard.pipeline, "describe_characters") as describe:
+            wizard.analyze(session)
+        for character in session["sml_characters"]:
+            self.assertIsNone(character.get("voice"))
+        self.assertIsNone(wizard.unified_voice(session))
+
+    def test_different_voices_still_cast_and_describe(self):
+        session = make_session(self.root, sml_multi_voices=True)
+        with mock.patch.object(wizard.pipeline, "analyze_book", fake_analyze_book), \
+             mock.patch.object(wizard.pipeline, "cast_characters", side_effect=fake_cast) as cast, \
+             mock.patch.object(wizard.pipeline, "describe_characters", side_effect=fake_describe) as describe:
+            wizard.analyze(session)
+        self.assertTrue(cast.called)
+        self.assertTrue(describe.called)
+        self.assertIsNotNone(wizard.voice_of(session, "Пётр"))
+
+    def test_the_analysis_is_still_cached_for_one_voice(self):
+        session = make_session(self.root, sml_multi_voices=False)
+        with mock.patch.object(wizard.pipeline, "analyze_book", fake_analyze_book), \
+             mock.patch.object(wizard.pipeline, "cast_characters"), \
+             mock.patch.object(wizard.pipeline, "describe_characters"):
+            first = wizard.analyze(session)
+        with mock.patch.object(wizard.pipeline, "analyze_book") as again, \
+             mock.patch.object(wizard.pipeline, "cast_characters"), \
+             mock.patch.object(wizard.pipeline, "describe_characters"):
+            second = wizard.analyze(session)
+        again.assert_not_called()
+        self.assertIn("Анализ уже сделан", second)
+        self.assertNotEqual(first, second)
 
 
 if __name__ == "__main__":

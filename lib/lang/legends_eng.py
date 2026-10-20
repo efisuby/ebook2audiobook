@@ -198,6 +198,7 @@ legends = {
     'msg_convert_time': 'Converting time to words…',
     'msg_convert_numbers': 'Converting numbers and math signs to words…',
     'msg_normalize_text': 'Normalizing text…',
+    'msg_apply_stress': 'Applying stress marks…',
     'msg_segment': 'Segment {n}',
     'msg_source_changed': 'Source file changed: {kept} unchanged, {changed} modified, {added} added, {removed} removed. Only modified and added blocks will be reconverted.',
     'msg_interludes_unknown_lang': 'Interludes: the mood classifier does not know {lang}, calm and reflective moods are used instead{suffix}',

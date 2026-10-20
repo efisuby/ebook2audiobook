@@ -58,6 +58,12 @@ TTS_SML_EMOTIONS = {
 sml_escape_tag = 0xE000
 sml_tag_keys = '|'.join(map(re.escape, TTS_SML.keys()))
 
+# Sentence size cap used when a block is split into the pieces the engine
+# speaks one at a time (see lib.core.get_sentences).  Large enough that an
+# ordinary sentence stays in one block, so the splitter never has to cut at an
+# internal comma and make the engine end the sentence intonationally.
+SENTENCE_MAX_CHARS = 1024
+
 SML_TAG_PATTERN = re.compile(
     rf'''
     \[

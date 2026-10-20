@@ -311,20 +311,31 @@ no description may mention another character's features.
 
 | File | Change |
 | --- | --- |
-| `sml_extractor/stress.py` | New: accents the plain prose of an SML text with silero-stress (`замок` → `зам+ок`), or strips those marks again. |
+| `sml_extractor/stress.py` | New: accents the plain prose of an SML text with silero-stress (`замок` → `зам+ок`, mark = `+` before the vowel — the form the checkpoints were trained on), or strips those marks again. |
 | `tests/test_stress.py` | New: 13 tests (accenting only outside tags, non-`+` plus signs survive, engine routing). |
-| `lib/classes/tts_engines/silero.py` | Untouched by this step: the engine keeps its own lazy `_accent()` as a second, idempotent layer. |
+| `lib/classes/tts_engines/silero.py` | `_accent()` translates the leftover U+00B4 (`´`) mark → `+` before `apply_tts()`; its own lazy accentor stays behind the preset's `"stress"` flag. |
 
 ### Design notes for future edits
 
-- Only Silero's checkpoints understand the marks: every other engine would read the `+`
-  as a character, so the pipeline accents the text for `silero` and strips the marks for
-  everything else (`stress_for_engine(text, tts_engine)`).
+- Only Silero's checkpoints understand the marks: every other engine would read a mark
+  as a character, so `stress_for_engine(text, tts_engine)` accents the text for `silero`
+  and strips the marks for everything else.
+- **Stress is the LAST filtering stage.** The marks are written only after every
+  normalizer in `lib.core.filter_blocks` — `math2words()` would otherwise verbalize a
+  `+` into the word «плюс» (its `language_math_phonemes['rus']['+']`). Incoming marks
+  are stripped before `non_text_filter()` and re-applied after `restore_sml()`, gated by
+  `session.get('sml_use_stress', True)` and the legend `msg_apply_stress`.
+- The mark kept in the SML document **and sent to the model is `+`** (`Г+ород`) — the
+  notation silero-stress returns and the Silero checkpoints were trained on. An earlier
+  variant of this file wrote U+00B4 (`´`) instead; that mark is never written again:
+  `accent_text()` translates it back to `+`, `strip_text()` removes `´` before a vowel,
+  `+` before a vowel and combining U+0301 after a vowel. **Do not reintroduce `´`** —
+  the request is that the model receives `+` text.
+- A mark is only a symbol *before a vowel*, so `2+2`, `A+B` and `C+1` are never changed.
 - SML tags and the voice paths inside them are never touched: `_outside_tags()` splits on
   a local copy of the tag regex and only decorates the text chunks. Keep the tag names in
   sync with `TTS_SML` in `lib/conf_models.py` — the module is deliberately independent of
   the rest of E2A so that it can be tested and reused on its own.
-- A mark is a `+` *before a vowel* only, so `2+2`, `A+B` and `C+1` are never changed.
 - The local tag regex also matches the closing tags (`[/voice]`), so an accented block
   keeps its exact shape; `strip_sml` of an accented text returns exactly the input, which
   makes the non-Silero route safe when a book already carries marks.
@@ -338,8 +349,8 @@ no description may mention another character's features.
 `env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 121 tests
 OK (85 ported + 23 profile + 13 stress). With the real package installed,
 `accent_sml('[voice:/v/rus/adult/male/Petr.wav]Замок был на двери, а замок стоял на реке.[/voice]')`
-must mark the prose and leave the tag and its path verbatim, `strip_sml` of the result
-must return the input, and `stress_for_engine(text, 'xtts')` must strip the marks.
+must mark the prose with `+` and leave the tag and its path verbatim, `strip_sml` of the
+result must return the input, and `stress_for_engine(text, 'xtts')` must strip the marks.
 
 ## Fork change: the SML wizard glue (`sml_extractor/pipeline.py`)
 
@@ -404,7 +415,7 @@ session-driven logic (no Gradio), `lib/gradio.py` only calls one function per bu
 | --- | --- |
 | `lib/sml_wizard.py` | New: `analyze`, `rows`, `names`, `voice_choices`, `set_voice`, `voice_of`, `sample`, `preview`, `build`, `apply`, `cancel`, `save`, `restore`, `state`, plus the cast editing (`remove_character`/`removed`, `set_gender`/`set_age`, `set_selected`), the Silero built-in voices (`silero_choices`, `builtin_speaker`, `_write_silence`), the parsed-book cache and the source digest. |
 | `lib/gradio.py` | The `gr_sml_*` component group (after `gr_convert_btn`) and the `_click_gr_sml_*` handlers + event wiring (before `########### Main chains`), plus the `_restore_sml_wizard` step in the session-restore chain. |
-| `lib/core.py` | `sml_output_dir`, `sml_book_id`, `sml_characters`, `sml_removed`, `sml_selected`, `sml_text`, `sml_applied` added to `set_session` (so they survive a reload) and **removed** from `reset_ebook_session`. |
+| `lib/core.py` | `sml_output_dir`, `sml_book_id`, `sml_characters`, `sml_removed`, `sml_selected`, `sml_text`, `sml_applied`, `sml_multi_voices` added to `set_session` (so they survive a reload) and **removed** from `reset_ebook_session`. |
 | `sml_extractor/pipeline.py` | `sample_text` (`DEFAULT_SAMPLE_WORDS = 40`, `MAX_SAMPLE_WORDS = 90`) — a multi-sentence listen fragment. |
 | `tests/test_sml_wizard.py` | New: 57 tests over a fake session, patched pipeline steps and a temporary voice library. |
 
@@ -484,7 +495,110 @@ character shows its description, voice, gender and age, «◉» synthesizes a lo
 «Собрать SML» shows the text preview, «Озвучить» starts the normal conversion,
 «Отмена»/«Стоп» interrupt it. «🗑 Удалить персонажа» removes a bogus name (the narrator
 reads its lines); the gender/age dropdowns edit the cast; with the Silero engine the voice
-list also offers the `[silero]` built-ins. Reloading the page keeps the stage.
+list also offers the `[silero]` built-ins; «Разные голоса» off reads the whole book with the
+narrator's voice. Reloading the page keeps the stage.
+
+## Fork change: the «Сброс сессии» button
+
+`gr_session_reset_btn` (the session group, next to `gr_session_switch_btn`) drops the
+work of the current session — the loaded book, its finished audio and the SML wizard —
+while keeping the settings (engine, model, voice, language, output format).
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `lib/gradio.py` | `gr_session_reset_btn`, `_click_gr_session_reset_btn()` and its `.click()` wiring (single output: `gr_restore_session`). |
+
+### Design notes for future edits
+
+- The handler runs `reset_ebook_session(force=True, filter_keys=False)` and then clears
+  the source keys (`ebook_src`, `ebook_list`, `ebook_selected`, `ebook_textarea`,
+  `audiobook`) **and every `sml_*` key** by hand: `reset_ebook_session` deliberately
+  leaves `sml_*` alone (the wizard needs them to survive a conversion and «Отмена»), so
+  a real reset has to drop them itself.
+- The single output is `gr_restore_session`: handing the cleared session back as JSON
+  runs the ordinary restore chain (`_change_gr_restore_session` → `_restore_interface` →
+  `_restore_ui_language` → `_restore_audiobook_player` → `_restore_sml_wizard` →
+  `init_interface()`), the same path a page load takes. That is why the handler lists no
+  components of its own — everything the chain renders (file slot, textarea, player,
+  lists, wizard) is refreshed from the cleared session, and the save timer then stores
+  that state in localStorage so a reload does not bring the book back.
+- The payload must carry `status = ready`: `_change_gr_restore_session` only forces its
+  values in when `data['status'] == status_tags['READY']`.
+- While `status` is `converting` or `edit` the click only shows a warning — the session
+  object is still owned by the running conversion.
+- The payload is `{k: v for k, v in session.items() if k not in save_session_keys_except}`,
+  exactly what `_update_gr_save_session()` stores.
+
+## Fork change: the «Разные голоса» switch
+
+`gr_sml_multi_voice` (a checkbox right under «Анализ книги» / «Собрать SML»)
+switches the voicing between the cast and one voice for the whole book. **On is
+the default** and is the old behaviour: every character is read with its own
+voice. **Off** collapses every voice onto a single one — the narrator's — so the
+whole book is read by one voice.
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `lib/sml_wizard.py` | `multi_voices`, `set_multi_voices`, `unified_voice`, `effective_voice`, `effective_voices`, `voice_picker_enabled`; `rows`, `preview`, `build` and `_voice_map` now go through `effective_voices`/`effective_voice`, and `state` returns `multi`. `save`/`restore` carry `multi_voices`. `analyze` skips casting + descriptions when off, and reuses the BookNLP output on a re-run. |
+| `sml_extractor/pipeline.py` | `preview_lines()` passes `voices=voices` to `character_rows()`, so the preview line shows the voice that will really be used. |
+| `lib/gradio.py` | The `gr_sml_multi_voice` checkbox and the `_click_gr_sml_multi_voice` handler + its `.input()` wiring; the character-pick/table/voice-pick/gender/age handlers and `_restore_sml_wizard` render `effective_voice` and set the dropdown's `interactive` from `voice_picker_enabled`; `_click_gr_sml_listen_btn` synthesizes with `effective_voice` (off ⇒ the narrator's voice); turning the switch on with an uncalled cast asks for «Анализ книги». |
+| `lib/core.py` | `sml_multi_voices` (default `True`) added to `set_session`. |
+| `tests/test_sml_wizard.py` | `MultiVoiceTests` (12 tests) and `SingleVoiceAnalysisTests` (4 tests). |
+
+### Design notes for future edits
+
+- **The cast is never rewritten.** Off only changes what `_voice_map`/`rows`/
+  `preview`/the dropdown render; turning the switch back on restores every
+  per-character voice, so the user never loses the casting work.
+- **Off skips the two slow steps of `analyze`** — `cast_characters` (voice
+  selection) and `describe_characters` (the LLM descriptions) — because with one
+  voice the cast is never used. BookNLP itself still runs: it is what splits
+  narration from dialogue, and only dialogue carries the `[emotion:…]` labels,
+  which are kept in one-voice mode. The characters are still produced (and the
+  table still shows them), they simply have no `voice`/`description`.
+- The «already analysed» early return only short-circuits when the switch is on
+  **or** the cast already has voices (`cast_ready`), so flipping the switch on
+  after a one-voice analysis really runs the casting.
+- The re-run reuses the BookNLP output already on disk (`pipeline.load_book`)
+  instead of re-running the model, so switching the mode costs only the casting
+  and the descriptions, not the parse.
+- `unified_voice()` = the **narrator's** voice, falling back to the first voice in
+  the cast when there is no narrator. With no voice at all, off degrades to the
+  unchanged map (nothing is collapsed).
+- **`sml_multi_voices` is deliberately NOT in `reset_ebook_session`** — like the
+  other `sml_*` keys, it has to survive every conversion (including «Озвучить»)
+  so that off stays off while the book is being read. The real reset is
+  `gr_session_reset_btn`, which drops the whole `sml_*` block by hand; add it
+  there if a new key is introduced.
+- `_voice_map` order matters: `effective_voices()` first, then the deleted-name →
+  narrator override, then the Silero-marker filter. Collapsing before the
+  narrator override is safe because both end up on the narrator's voice.
+- With off, the **voice dropdown stays editable only on the narrator's row**
+  (`voice_picker_enabled`); that is where the single voice is picked. The other
+  rows render the narrator's voice but their edits would be ignored. The switch
+  itself is wired with `.input()` (user-only), like the gender/age dropdowns, so
+  a programmatic re-render cannot toggle the mode behind the user's back.
+- The switch is **not** in `outputs_refresh_interface`/`outputs_disable_components`
+  (index-based lists) — same choice as the rest of the wizard panel.
+- Naming: the checkbox is «Разные голоса», the session key is `sml_multi_voices`.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 237 tests
+OK (233 before the one-voice analysis skip, +4). `build_interface(...)` still builds
+the Blocks.
+
+In the running app: analyse a book, uncheck «Разные голоса» — the table and the
+preview show the narrator's voice for every character and «Собрать SML» reports
+`Один голос для всех: <voice>`; check it again and every cast voice is back.
+While a document is already built, toggling asks for «Собрать SML» again.
+Analysing with the switch off skips the descriptions and the casting (watch for
+`[sml] Режим одного голоса: …` in the console); flipping it on afterwards and
+pressing «Анализ книги» runs just those two steps (the parse is reused).
 
 ## Fork change: Silero survives unpronounceable fragments
 
@@ -527,3 +641,153 @@ Real-checkpoint run (`/tmp/opencode/silero_real_check.py`) with `v5_6_ru`:
 `'12345'`, `'...'` and `'Mr. Smith'` each return `(True, None)` with a 57680-byte silent
 wav instead of raising, while `'Привет, мир!'` and `'Глава 2. Он пришёл.'` still
 synthesize normally.
+
+(The suite count above predates the «Разные голоса» switch (+12 wizard tests), the
+sentence-pause fix (+5 silero tests), the console logs, the 1024 sentence cap
+(+6 split tests) and the one-voice analysis skip (+4 wizard tests) — the current run
+is 237 tests OK.)
+
+## Fork change: the sentence pause is recovered from the terminator
+
+The Silero engine used to pause after every fragment that did not end on a word
+character. Because the pipeline splits a block **at** its punctuation, a fragment
+cut at a comma («…дела,») looked like a sentence end and got a full 0.3–0.6 s pause:
+the narrator seemed to stop at every comma.
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `lib/classes/tts_engines/silero.py` | `_terminator_after()` restores the pause decision from the untrimmed sentence; `_raw_source()` finds the fragment inside it; `_convert_parts` keeps the split parts of the current sentence. |
+| `tests/test_silero_convert.py` | New `TerminatorPauseTests` (5 tests). |
+
+### Design notes for future edits
+
+- `lib.core.filter_blocks` splits a sentence at its terminator, so
+  `convert(sentence_file, sentence)` receives each fragment **without** the
+  period. The old test `not re.search(r'\w$', part)` therefore fired on «,», «:»
+  and «—» too. Never infer "sentence end" from the shape of a fragment.
+- `_terminator_after(sentence, part)` looks the fragment up in the original
+  sentence and checks whether what follows starts with `.`/`!`/`?`/`…` (or `..`).
+  Only a real terminator pauses; comma/colon/dash never do.
+- `_raw_source(part)` recovers the pre-accent form: it walks `_convert_parts`
+  (the plain list of strings from `_split_sentence_on_sml`) backwards, skipping
+  the `[voice:]`/`[/voice]` tags, and matches either the exact text or its
+  `lstrip('+')` copy (the fragment reaching the loop is the **stressed** one).
+  `_convert_parts` is a list of plain strings — not `(kind, value)` tuples.
+- `_silence_follows` is unchanged: it already treats an explicit `[break]`/`[pause]`
+  as "silence is coming" and a `[voice]`/`[emotion]` tag as transparent.
+- **The app must be restarted** after touching `silero.py`: the module is loaded
+  once and a live process keeps the old code.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` →
+`TerminatorPauseTests` covers the recovered period pause, the comma/colon/dash
+non-pause, and the trailing fragment's pause.
+
+## Fork change: no session-cleanup notice in the local GUI
+
+The alert «Примечание: если в течение 60 дн. … сессия будет очищена. … должны быть
+включены cookie.» is no longer shown.
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `lib/gradio.py` | `_change_gr_restore_session` no longer appends `msg_session_cleanup_notice`/`msg_cookies_required`; `show_alert` runs only for the shared-GUI limit. |
+
+### Design notes for future edits
+
+- The shared-GUI branch still reports `msg_shared_access_limit`. The legend keys
+  (`msg_session_cleanup_notice`, `msg_cookies_required`) are left in all 18
+  `lib/lang/legends_*.py` files untouched — only the local path stopped using them.
+- `delete_unused_tmp_dirs(...)` still runs in the local branch; the notice was
+  removed, not the cleanup.
+
+## Fork change: console progress logs (`[sml] …`)
+
+Steps announce themselves in the console: `— начали` before, and
+`— закончили[: <итог>] за <секунды> с` (or `— ошибка …`) after.
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `sml_extractor/__init__.py` | `log(message)` prints `[sml] …` with `flush=True`; `traced(name, describe=None)` wraps a function with the start/finish/failure lines. |
+| `sml_extractor/pipeline.py` | `analyze_book`, `load_book`, `describe_characters`, `cast_characters`, `character_rows`, `build_sml` are decorated with `traced(...)`. |
+| `lib/sml_wizard.py` | `from sml_extractor import log as _log`; `analyze`, `build`, `build_5min`, `apply`, `cancel`, `save`, `restore`, `set_voice`, `remove_character`, `_set_field` and `reassign_voice_by_gender_age` log their outcome. |
+| `lib/gradio.py` | The «Анализ книги» and «Собрать SML» handlers print the button press before calling the wizard. |
+
+### Design notes for future edits
+
+- `traced` is a decorator **factory**; its `describe` maps the return value to the
+  outcome text and is wrapped in `try/except` so a bad `describe` cannot break the
+  call. `functools.wraps` keeps the name and docstring. Put the decorator directly
+  above `def`, above the docstring.
+- Everything is plain `print` to stdout (the user chose console logs, not GUI
+  status strings). `flush=True` keeps the order when stdout is a pipe.
+- A failure is logged and the exception propagates unchanged, so the existing
+  `except WizardError`/`except Exception` handlers in `gradio.py` still decide the
+  GUI message.
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 227
+tests OK. In a run, every `[sml]` step shows a matched `начали`/`закончили` pair.
+
+## Fork change: the sentence size cap is 1024 (`SENTENCE_MAX_CHARS`)
+
+A block is cut into the pieces the engine speaks one at a time by
+`lib.core.get_sentences`. Its cap used to be `max_chars / 2` — **91 characters
+for «rus»** — which is smaller than an ordinary sentence: a normal sentence was
+then force-split, and `_force_split_segment` cut it at an internal comma, so the
+engine ended the sentence intonationally in the middle («одно предложение — два
+блока»). The cap is now **1024**, so any realistic sentence stays in one block
+and is never cut.
+
+### Files touched
+
+| File | Change |
+| --- | --- |
+| `lib/conf_models.py` | New `SENTENCE_MAX_CHARS = 1024` next to `sml_escape_tag`. |
+| `lib/__init__.py` | The constant is imported from `.conf_models` and re-exported in `__all__`, so `lib.core` (which does `from lib import *`) sees it. |
+| `lib/core.py` | `get_sentences` uses `max_chars = SENTENCE_MAX_CHARS`; `_force_split_segment` prefers a hard terminator, then a space, and only falls back to a soft punctuation when neither exists (a comma makes the engine end the sentence, so it must never be the preferred cut); the orphan-merge ceiling became `max_chars` instead of `max_chars + max_chars//2`, so merging cannot push a piece above the cap. |
+| `tests/test_sentence_split.py` | New: 6 tests over `get_sentences` (a long ordinary sentence stays whole, the cap is 1024, a pathological sentence is still split and stays within the cap, no piece ends on a comma). |
+
+### Design notes for future edits
+
+- The cap is a **single module constant** `SENTENCE_MAX_CHARS`; do not reintroduce
+  a `language_mapping[...]['max_chars'] / N` derivation here. `max_chars` at
+  `lib/core.py` line ~1645 (`/1.5`) belongs to the **raw flattening** stage in
+  `get_blocks` and is unrelated — it never reaches `get_sentences`.
+- `_force_split_segment`'s search order is deliberate: (1) last **hard**
+  punctuation in the window, (2) last **space**, (3) last **soft** punctuation,
+  (4) hard cut at the cap. A soft punctuation is the thing the engine hears as a
+  sentence end, so it must be the last resort before the raw cut.
+- `punctuation_split_hard_set` **includes `—` (em dash)**, which is also used as
+  an internal parenthetical dash; that is pre-existing behaviour, left as is.
+- The GUI sentence editor (`lib/gradio.py` ~1594) still validates a *hand-edited*
+  sentence against `max_chars / 1.5` and the field itself is limited to 500 chars;
+  that is a per-sentence editor limit and is intentionally independent of the
+  1024 automatic-split cap.
+- The change applies to every language (and to the CJK path inside
+  `get_sentences`, which shares the same local `max_chars`).
+
+### How to check
+
+`env -u LD_LIBRARY_PATH python_env/bin/python -m unittest discover -s tests` → 233
+tests OK (227 before + 6 new). Reproduce without a model:
+
+```python
+from types import SimpleNamespace
+from lib import core
+core.context = SimpleNamespace(get_session=lambda sid: {
+    'language': 'rus', 'translate_enabled': False, 'translate': None,
+    'tts_engine': 'silero', 'is_gui_process': False})
+core.get_sentences('s', 'По воле благословенного Императора, решившего отойти '
+                       'от ратных дел, бразды правления этой беспримерной '
+                       'кампанией были вручены Хорусу, примарху Легиона '
+                       'Лунных Волков.')
+```
+→ one block (before: two, cut at the comma after «дел»).

@@ -10,7 +10,7 @@ Classifier: Operating System :: OS Independent
 Requires-Python: <3.13,>3.9
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: gradio==6.28.0
+Requires-Dist: gradio==6.29.1
 Requires-Dist: coqui-tts[languages]==0.27.5
 Requires-Dist: piper-tts==1.4.2
 Requires-Dist: argostranslate
@@ -63,6 +63,12 @@ Requires-Dist: torchvggish
 Requires-Dist: pyannote-audio
 Requires-Dist: demucs-simple
 Requires-Dist: huggingface-hub
+Requires-Dist: qwen-tts
+Requires-Dist: accelerate
+Requires-Dist: librosa
+Requires-Dist: einops
+Requires-Dist: sox
+Requires-Dist: silero-stress
 Dynamic: license-file
 Dynamic: requires-dist
 
@@ -159,9 +165,9 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
     - [Steps to Run](#docker)
   
 - [Cloned Voices](#cloned-voices)
-- [Fine Tuned TTS models](#fine-tuned-tts-models)
+- [Fine Tuned TTS models](#fine-tuned-tts-models) 
   - [Collection of Fine-Tuned TTS Models](#fine-tuned-tts-collection)
-  - [Train XTTSv2](#fine-tune-your-own-xttsv2-model)
+  - [Train TTS Model](#fine-tune-your-own-tts-model)
 - [Supported eBook Formats](#supported-ebook-formats)
 - [Output Formats](#output-and-process-formats)
 - [Revert to older Version](#reverting-to-older-versions)
@@ -171,7 +177,7 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 
 
 ## Features
-- 🔧 **TTS Engines supported**: `XTTSv2`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
+- 🔧 **TTS Engines supported**: `XTTSv2`, `Qwen3-TTS`, `Silero`, `Bark`, `Fairseq`, `VITS`, `Tacotron2`, `Tortoise`, `GlowTTS`, `YourTTS`
 - 📚 **Convert multiple file formats**: `.epub`, `.mobi`, `.azw3`, `.fb2`, `.lrf`, `.rb`, `.snb`, `.tcr`, `.pdf`, `.txt`, `.rtf`, `.doc`, `.docx`, `.html`, `.odt`, `.azw`, `.tiff`, `.tif`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.zip`
 - 💻 **TextArea** to convert directly a short text in audio
 - 🔍 **OCR scanning** for files with text pages as images
@@ -223,8 +229,9 @@ https://github.com/user-attachments/assets/81c4baad-117e-4db5-ac86-efc2b7fea921
 - `[pause]` — silence (random range **1.0–1.6 sec.**)
 - `[pause:N]` — fixed pause (**N sec.**)
 - `[voice:/path/to/voice/file]...[/voice]` — switch voice from default or selected voice from GUI/CLI
+- `[emotion:LABEL]...[/emotion]` — keep the voice but tune it for the enclosed text: the label overrides the engine sampling parameters (**temperature**, `top_p`, `speed`) and applies a volume gain until `[/emotion]`. Labels: `neutral`, `calm`, `mysterious`, `melancholic`, `sad`, `anxious`, `afraid`, `sarcastic`, `happy`, `playful`, `passionate`, `energetic`, `excited`, `angry`. `neutral` is a no-op and can be omitted. Engines that lack the tuned parameters (all but XTTS/Bark) still apply the gain.
 
-**Check our other repo dedicated to add SML automatically in your ebook -> [E2A-SML](https://github.com/DrewThomasson/E2A-SML)**
+**Check our other repo dedicated to add SML automatically in your ebook -> [E2A-SML](https://github.com/efisuby/E2A-SML)**
 
 > [!IMPORTANT]
 **Before to post an install or bug issue search carefully to the opened and closed issues TAB<br>
@@ -238,7 +245,7 @@ So you should first remove manually any text you don't want to be converted in a
 ### Instructions 
 1. **Clone repo**
 	```bash
-	git clone https://github.com/DrewThomasson/ebook2audiobook.git
+	git clone https://github.com/efisuby/ebook2audiobook.git
 	cd ebook2audiobook
 	```
 
@@ -413,6 +420,7 @@ optional parameters:
                         Audiobookshelf API token.
   --abs_library ABS_LIBRARY
                         Audiobookshelf library ID.
+  --enable_interlude    Add MusicGen music before the first chapter, between chapters, and at the end of the audiobook. Settings are in ./lib/conf_interlude.py
   --version             Show the version of the script and exit
 
 Example usage:
@@ -432,6 +440,7 @@ SML tags available:
 	[pause] — silence (random range **1.0–1.6 sec.**)
 	[pause:N] — fixed pause (**N sec.**)
 	[voice:/path/to/voice/file]...[/voice] — switch voice from default or selected voice from GUI/CLI
+	[emotion:LABEL]...[/emotion] — tune temperature/top_p/speed and volume gain for the enclosed text
 
 ```
 
@@ -441,7 +450,7 @@ TIP: if it needs some more pause, add '[pause:3]' for 3 sec. etc.
 ### Docker
 1. **Clone the Repository**:
 ```bash
-   git clone https://github.com/DrewThomasson/ebook2audiobook.git
+   git clone https://github.com/efisuby/ebook2audiobook.git
    cd ebook2audiobook
 ```
 2. **Build the container**
@@ -506,11 +515,50 @@ It doesn't matter if the recording has a noisy background or music playing over 
 The built-in cloned voices list is mainly in English. If you need voices in other languages to be officially
 added to the list, please contact us and we'll add them after review.
 
+### Qwen3-TTS
+`Qwen3-TTS` clones the voice of the reference `.wav` that is cast to each character, using
+`Qwen/Qwen3-TTS-12Hz-1.7B-Base` (a lighter `Qwen/Qwen3-TTS-12Hz-0.6B-Base` preset is also available,
+selectable in the fine tuned models list). Because E2A has no transcript for a reference voice, the cloning is
+done in x-vector-only mode and needs no reference text. Output is 24 kHz mono and the supported languages are
+Chinese, English, German, Italian, Portuguese, Spanish, Japanese, Korean, French and Russian.
+
+The engine ignores the temperature/top_p/speed style overrides (Qwen exposes no such surface), but it still
+honours the `[emotion:...]` SML tag as a volume gain, and the `[voice:...]` tag / per-character casting work
+exactly like with XTTSv2.
+
+The `qwen-tts` python package pins an older `transformers`, so the device installer installs it with `--no-deps`
+and its runtime dependencies are listed directly in `requirements.txt`. Installing it manually, keep that in mind:
+
+```bash
+pip install --no-deps qwen-tts
+pip install accelerate librosa einops sox
+```
+
+### Silero TTS
+`Silero TTS` is a small, fast CPU engine that needs no reference voice: the file cast to a character only
+selects one of the five built-in speakers of the checkpoint. Voices living in a `…/adult/male/` folder map to
+`aidar`/`eugene` and voices in `…/adult/female/` to `baya`/`kseniya`/`xenia`, handed out round-robin so every
+character keeps its own speaker for the whole book. Only Russian is supported; `[voice:...]` and the
+`[emotion:...]` gain behave as with the other engines, while the temperature/top_p/speed overrides are ignored.
+
+Pick the checkpoint in the `Fine Tuned` list: `v5_6_ru` (also listed as `internal`, the key every session starts
+with — the same checkpoint) is the newest of the family with automatic stress, homographs, question and emphasis
+intonation; `v5_5_ru` is the same voices without the emphasis intonation, and `v4_ru` is the smaller previous
+generation (~40 MB instead of ~150 MB). The chosen checkpoint is downloaded on first use from `models.silero.ai`
+into `models/tts/silero/` — the checkpoint needs nothing but `torch` to load. Output is 24 kHz mono.
+
+Every fragment is pre-processed with `Silero Stress` (`silero-stress`, MIT, bundled with the other requirements):
+it writes the stress and solves the homographs of the Russian text (`замок` → `зам+ок`), and the checkpoints
+honour those marks, so this newer accentor decides rather than the one packed into the checkpoint. It costs a
+couple of milliseconds per sentence; add `"stress": False` to a checkpoint entry in
+`lib/classes/tts_engines/presets/silero_presets.py` to synthesize the raw text instead. The weights are
+published under the **non-commercial CC BY-NC-SA 4.0** licence (the code is MIT), so check the terms before any
+commercial use.
+
 ## Fine Tuned TTS models
-#### Fine Tune your own XTTSv2 model
+#### Fine Tune your own TTS model
 
-[Universal_TTS_Finetune](https://github.com/DrewThomasson/Universal_TTS_Finetune) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Spaces-yellow?style=flat&logo=huggingface)](https://huggingface.co/spaces/drewThomasson/xtts-finetune-webui-gpu) [![Kaggle](https://img.shields.io/badge/Kaggle-035a7d?style=flat&logo=kaggle&logoColor=white)](https://github.com/DrewThomasson/ebook2audiobook/blob/v25/Notebooks/finetune/xtts/kaggle-xtts-finetune-webui-gradio-gui.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/DrewThomasson/ebook2audiobook/blob/v25/Notebooks/finetune/xtts/colab_xtts_finetune_webui.ipynb)
-
+[Universal_TTS_Finetune](https://github.com/DrewThomasson/Universal_TTS_Finetune)
 
 #### De-noise training data
 
@@ -549,7 +597,8 @@ git checkout tags/VERSION_NUM # Locally/Compose -> Example: git checkout tags/v2
 - All Features open to public Contributions ⭐
 - Any help from people speaking any of the supported languages to help us improve the models ⭐
 - [x] Preview Blocks/Chapters before to start the conversion
-- [ ] Edit by sentence converted for surgical text change
+- [x] Edit by sentence converted for surgical text change
+- [x] Generate music intros, interludes, and endings; edit interludes and endings
 - [x] SML tags integration for voice, pause, break, and more changes 
 - [x] -h -help parameter info in different languages
 - [x] OCR scanning for PDF / JPG / BMP / PNG / TIFF
@@ -603,7 +652,8 @@ git checkout tags/VERSION_NUM # Locally/Compose -> Example: git checkout tags/v2
 - [ ] Orpheus-TTS (https://github.com/canopyai/Orpheus-TTS)
 - [ ] NewTTS (https://github.com/neuphonic/neutts?tab=readme-ov-file)
 - [ ] VIbeVoice (https://github.com/vibevoice-community/VibeVoice)
-- [ ] Qwen3-TTS (https://huggingface.co/spaces/Qwen/Qwen3-TTS)
+- [x] Qwen3-TTS (https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
+- [x] Silero TTS (https://github.com/snakers4/silero-models)
 
 #### Readme Translation
 - [x] Arabic (ara)
@@ -644,8 +694,8 @@ git checkout tags/VERSION_NUM # Locally/Compose -> Example: git checkout tags/v2
 **********
 
 ## Extra Overkill for training models and such (All supported Coqui-tts models and piper-tts in one easy command) 
-- For info about this @DrewThomasson, he is currently working on the development of this, [work-in-progress-repo here](https://github.com/DrewThomasson/Universal_TTS_Finetune)
-- [ ] Make a easy to use training gui for all coqui-tts models in the ljspeech format training recipes [here from coqui tts](https://github.com/coqui-ai/TTS/tree/dev/recipes/ljspeech)
+- For info about this @DrewThomasson, he is currently working on the development of this, [Universal TTS Finetune](https://github.com/DrewThomasson/Universal_TTS_Finetune)
+- [x] Make a easy to use training gui for all coqui-tts models in the [ljspeech format training recipes](https://github.com/coqui-ai/TTS/tree/dev/recipes/ljspeech) Completed at [Universal TTS Finetune](https://github.com/DrewThomasson/Universal_TTS_Finetune)
 
 
 ## Python Code normalization information for contributors

@@ -8,6 +8,11 @@ broken ``combine_audio_sentences`` as well.
 
 The engine is built with ``__new__`` so these tests never load a real checkpoint;
 only ``apply_tts`` and ``audio_save`` are faked.
+
+A second group covers the pause the engine inserts after a sentence-ending
+punctuation mark: E2A's ``filter_blocks`` splits a block at that mark, so the
+fragment carries no terminator of its own and ``convert`` has to recover it from
+the untrimmed sentence it came from.
 """
 
 import os
@@ -47,6 +52,7 @@ def make_engine(tmp):
     engine.audio_segments = []
     engine.accentor = False
     engine.use_stress = False
+    engine._convert_parts = []
     engine.params = {
         'samplerate': 48000,
         'voice_speakers': {},
@@ -107,6 +113,94 @@ class ConvertTests(unittest.TestCase):
     def test_the_speaker_is_chosen_by_the_voice_gender(self):
         self._convert('Привет')
         self.assertIn(self.engine.engine.calls[0][1], Silero.speaker_pools['male'])
+
+
+class TerminatorPauseTests(unittest.TestCase):
+    """The terminator is recovered from the untrimmed sentence (see convert())."""
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.root = self._tmp.name
+        self.engine = make_engine(self.root)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _sentence(self, sentence, **kwargs):
+        """Convert ``sentence`` and keep the segments for inspection.
+
+        ``convert`` clears ``audio_segments`` once the file is written, so the
+        list is signalled to be kept by the fake ``audio_save``.
+        """
+        target = os.path.join(self.root, 'out.wav')
+        self.engine.audio_segments = []
+        saved = []
+
+        def audio_save(sentence_file, segment_tensor, samplerate):
+            saved.append(segment_tensor)
+            Path(sentence_file).write_bytes(b'RIFF' + b'\x00' * 64)
+            return True
+
+        self.engine.audio_save = audio_save
+        result = self.engine.convert(target, sentence, **kwargs)
+        self.assertEqual(result, (True, None))
+        self._last_audio = saved
+        return self.engine
+
+    def _silences(self):
+        """The silent stretches (offset, length) inside the audio of the last conversion."""
+        silences = []
+        for tensor in getattr(self, '_last_audio', []):
+            data = tensor[0]
+            index = 0
+            while index < data.shape[-1]:
+                if data[index] == 0:
+                    start = index
+                    while index < data.shape[-1] and data[index] == 0:
+                        index += 1
+                    silences.append((start, int(index - start)))
+                else:
+                    index += 1
+        return silences
+
+    def test_a_period_split_off_the_sentence_still_pauses(self):
+        # the wizard hands over 'Пётр читает' while the sentence had a period:
+        # the fragments of sentence_parts carry no punctuation at all, so the
+        # terminator is recovered from the untrimmed sentence. The exact silence
+        # length is randomised (0.3-0.6 s per fragment), so only the fact that
+        # silence follows *each* fragment is asserted.
+        voice_file = os.path.join(self.root, 'Мария.wav')
+        Path(voice_file).write_bytes(b'RIFF' + b'\x00' * 8)
+        self._sentence(f'Пётр читает.[voice:{voice_file}]Мария кивает.')
+        data = self._last_audio[0][0]
+        # two fragments spoken
+        self.assertEqual(int((data != 0).sum()), 2 * 2400)
+        # and a pause follows each of them, so there is noticeably more silence
+        # than the single trailing pause of a one-fragment sentence. The pause is
+        # randomised (0.3-0.6 s), hence the generous floor of one whole pause.
+        self.assertGreaterEqual(int((data == 0).sum()), int(48000 * 0.3))
+
+    def test_a_comma_split_does_not_end_the_sentence(self):
+        self.assertFalse(Silero._terminator_after('Пётр читает, затем встаёт', 'Пётр читает'))
+        self.assertTrue(Silero._terminator_after('Пётр читает. Затем встаёт', 'Пётр читает'))
+        self.assertTrue(Silero._terminator_after('Пётр читает? Затем встаёт', 'Пётр читает'))
+        self.assertTrue(Silero._terminator_after('Пётр читает! Затем встаёт', 'Пётр читает'))
+        self.assertTrue(Silero._terminator_after('Пётр читает.. Затем встаёт', 'Пётр читает'))
+
+    def test_a_short_breath_is_not_a_sentence_end(self):
+        self.assertFalse(Silero._terminator_after('Пётр читает', 'Пётр читает'))
+        self.assertFalse(Silero._terminator_after('Пётр читает — затем', 'Пётр читает'))
+        self.assertFalse(Silero._terminator_after('Пётр читает: затем', 'Пётр читает'))
+
+    def test_the_last_fragment_still_gets_its_pause(self):
+        engine = self._sentence('Пётр читает')
+        silence = [length for _, length in self._silences()]
+        self.assertEqual(len(silence), 1)
+        self.assertGreaterEqual(silence[0], int(48000 * 0.3))
+        self.assertLessEqual(silence[0], int(48000 * 0.6))
+
+    def test_a_fragment_that_already_ends_on_a_terminator_is_located(self):
+        self.assertTrue(Silero._terminator_after('Пётр читает.', 'читает'))
 
 
 if __name__ == '__main__':
